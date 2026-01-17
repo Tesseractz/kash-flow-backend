@@ -418,15 +418,22 @@ async def stripe_webhook(request: Request):
     sig = request.headers.get("stripe-signature")
     stripe = get_stripe_client()
     supa = get_supabase_client()
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+    
+    if not webhook_secret:
+        raise HTTPException(status_code=500, detail="Missing STRIPE_WEBHOOK_SECRET")
+    if not sig:
+        raise HTTPException(status_code=400, detail="Missing Stripe signature header")
     
     try:
-        event = stripe.Event.construct_from(
-            stripe.util.json.loads(payload),
-            stripe.api_key
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig,
+            secret=webhook_secret,
         )
     except Exception as e:
-        print(f"[Stripe Webhook] Error parsing payload: {e}")
-        raise HTTPException(status_code=400, detail="Invalid payload")
+        print(f"[Stripe Webhook] Error verifying signature: {e}")
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
     
     event_type = event["type"]
     print(f"[Stripe Webhook] Received event: {event_type}")
