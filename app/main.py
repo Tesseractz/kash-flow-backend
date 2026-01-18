@@ -253,10 +253,9 @@ def create_sale(payload: SaleCreate, ctx: RequestContext = Depends(get_current_c
 
 
 # Reports
-@app.get("/reports", response_model=ReportResponse)
-def get_reports(date_utc: Optional[str] = None, ctx: RequestContext = Depends(get_current_context)):
+def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None):
     """
-    Returns totals for the given UTC date (YYYY-MM-DD). Defaults to today (UTC).
+    Returns (target_date, totals, transactions) for the given UTC date (YYYY-MM-DD).
     """
     supabase = get_supabase_client()
     if date_utc:
@@ -300,8 +299,22 @@ def get_reports(date_utc: Optional[str] = None, ctx: RequestContext = Depends(ge
         cost = cost_by_id.get(pid, 0.0)
         total_profit += float(tx["total_price"]) - (cost * qty)
 
+    totals = {
+        "total_sales_count": total_sales_count,
+        "total_revenue": total_revenue,
+        "total_profit": total_profit,
+    }
+    return target_date, totals, transactions
+
+
+@app.get("/reports", response_model=ReportResponse)
+def get_reports(date_utc: Optional[str] = None, ctx: RequestContext = Depends(get_current_context)):
+    """
+    Returns totals for the given UTC date (YYYY-MM-DD). Defaults to today (UTC).
+    """
+    _, totals, transactions = _build_daily_report(ctx, date_utc)
     return {
-        "totals": {"total_sales_count": total_sales_count, "total_revenue": total_revenue, "total_profit": total_profit},
+        "totals": totals,
         "transactions": transactions,
     }
 
@@ -725,6 +738,7 @@ from .notifications import (
     send_email,
     generate_receipt_html,
     generate_low_stock_email,
+    generate_daily_summary_email,
     NotificationResult, ReceiptRequest
 )
 
@@ -749,6 +763,53 @@ class NotificationResponse(BaseModel):
     success: bool
     results: List[dict]
     message: str
+    payload: Optional[dict] = None
+
+
+class NotificationSettings(BaseModel):
+    notification_email: Optional[str] = None
+    low_stock_threshold: int = 10
+    daily_summary_enabled: bool = False
+
+
+def _fetch_notification_settings(supabase, store_id: str) -> dict:
+    try:
+        res = (
+            supabase.table("notification_settings")
+            .select("notification_email,low_stock_threshold,daily_summary_enabled")
+            .eq("store_id", store_id)
+            .single()
+            .execute()
+        )
+        return res.data or {}
+    except Exception:
+        return {}
+
+
+@app.get("/notifications/settings", response_model=NotificationSettings)
+def get_notification_settings(ctx: RequestContext = Depends(get_current_context)):
+    supabase = get_supabase_client()
+    settings = _fetch_notification_settings(supabase, ctx.store_id)
+    return settings or NotificationSettings().model_dump()
+
+
+@app.put("/notifications/settings", response_model=NotificationSettings)
+def update_notification_settings(
+    settings: NotificationSettings,
+    ctx: RequestContext = Depends(get_current_context)
+):
+    supabase = get_supabase_client()
+    payload = settings.model_dump()
+    payload["store_id"] = ctx.store_id
+    try:
+        res = (
+            supabase.table("notification_settings")
+            .upsert(payload, on_conflict="store_id")
+            .execute()
+        )
+        return res.data[0] if res.data else settings.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/notifications/low-stock", response_model=NotificationResponse)
@@ -782,10 +843,20 @@ def send_low_stock_notification(
         )
     
     results = []
-    
-    if request.send_email and request.email:
+    email_to_use = request.email
+    if request.send_email and not email_to_use:
+        settings = _fetch_notification_settings(supabase, ctx.store_id)
+        email_to_use = settings.get("notification_email")
+        if not email_to_use:
+            return NotificationResponse(
+                success=False,
+                results=[],
+                message="Notification email not configured"
+            )
+
+    if request.send_email and email_to_use:
         subject, html_body = generate_low_stock_email(low_stock_products)
-        result = send_email(request.email, subject, html_body)
+        result = send_email(email_to_use, subject, html_body)
         results.append(result.model_dump())
     
     all_success = all(r.get("success", False) for r in results) if results else True
@@ -794,6 +865,63 @@ def send_low_stock_notification(
         success=all_success,
         results=results,
         message=f"Processed notifications for {len(low_stock_products)} low-stock products"
+    )
+
+
+class DailySummaryRequest(BaseModel):
+    date_utc: Optional[str] = None
+    email: Optional[str] = None
+    send_email: bool = False
+
+
+@app.post("/notifications/daily-summary", response_model=NotificationResponse)
+def send_daily_summary_notification(
+    request: DailySummaryRequest,
+    ctx: RequestContext = Depends(get_current_context)
+):
+    target_date, totals, _transactions = _build_daily_report(ctx, request.date_utc)
+    date_label = target_date.strftime("%Y-%m-%d")
+    summary_payload = {
+        "date_label": date_label,
+        "totals": totals,
+    }
+
+    results = []
+    supabase = get_supabase_client()
+    email_to_use = request.email
+    if request.send_email and not email_to_use:
+        settings = _fetch_notification_settings(supabase, ctx.store_id)
+        if settings.get("daily_summary_enabled"):
+            email_to_use = settings.get("notification_email")
+        if not email_to_use:
+            return NotificationResponse(
+                success=False,
+                results=[],
+                payload=summary_payload,
+                message="Notification email not configured"
+            )
+
+    if request.send_email and email_to_use:
+        store_name = "Kash-Flow"
+        try:
+            store_res = supabase.table("stores").select("name").eq("id", ctx.store_id).single().execute()
+            store_name = store_res.data.get("name") or store_name
+        except Exception:
+            pass
+        subject, html_body = generate_daily_summary_email(
+            {"date_label": date_label, "totals": totals},
+            store_name=store_name
+        )
+        result = send_email(email_to_use, subject, html_body)
+        results.append(result.model_dump())
+
+    all_success = all(r.get("success", False) for r in results) if results else True
+
+    return NotificationResponse(
+        success=all_success,
+        results=results,
+        payload=summary_payload,
+        message="Daily summary processed"
     )
 
 

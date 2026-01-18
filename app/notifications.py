@@ -295,7 +295,7 @@ def generate_low_stock_email(products: List[dict], store_name: str = "Kash-Flow"
                     <thead>
                         <tr style="background-color: #f8fafc;">
                             <th style="padding: 12px 8px; text-align: left; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Product</th>
-                            <th style="padding: 12px 8px; text-align: left; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">SKU</th>
+                            <th style="padding: 12px 8px; text-align: left; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Product Code</th>
                             <th style="padding: 12px 8px; text-align: center; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Stock</th>
                         </tr>
                     </thead>
@@ -321,4 +321,56 @@ def generate_low_stock_email(products: List[dict], store_name: str = "Kash-Flow"
     </html>
     """
     
+    return subject, html_body
+
+
+def generate_daily_summary_email(summary: dict, store_name: str = "Kash-Flow") -> tuple:
+    """Generate daily finance summary email. Returns (subject, html_body)."""
+    date_label = summary.get("date_label", "Today")
+    totals = summary.get("totals", {})
+    sales_count = totals.get("total_sales_count", 0)
+    revenue = float(totals.get("total_revenue", 0))
+    profit = float(totals.get("total_profit", 0))
+
+    subject = f"📊 [{store_name}] Daily Summary - {date_label}"
+
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Daily Summary</title>
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f8fafc;">
+        <div style="background-color: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden;">
+            <div style="background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%); padding: 30px; text-align: center;">
+                <div style="font-size: 40px; margin-bottom: 10px;">📊</div>
+                <h1 style="color: white; margin: 0; font-size: 22px;">Daily Finance Summary</h1>
+                <p style="color: rgba(255,255,255,0.9); margin: 8px 0 0 0;">{date_label}</p>
+            </div>
+            <div style="padding: 20px;">
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <div style="display: flex; justify-content: space-between; background: #f8fafc; padding: 12px 16px; border-radius: 10px;">
+                        <span style="color: #64748b;">Sales Count</span>
+                        <strong style="color: #0f172a;">{sales_count}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; background: #f8fafc; padding: 12px 16px; border-radius: 10px;">
+                        <span style="color: #64748b;">Total Revenue</span>
+                        <strong style="color: #0f172a;">R {revenue:.2f}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; background: #f8fafc; padding: 12px 16px; border-radius: 10px;">
+                        <span style="color: #64748b;">Total Profit</span>
+                        <strong style="color: #0f172a;">R {profit:.2f}</strong>
+                    </div>
+                </div>
+            </div>
+            <div style="padding: 15px; text-align: center; border-top: 1px solid #e2e8f0;">
+                <p style="color: #94a3b8; font-size: 12px; margin: 0;">Sent by Kash-Flow</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
     return subject, html_body
