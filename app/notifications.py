@@ -215,24 +215,24 @@ def generate_receipt_html(sale_data: dict, store_name: str = "Kash-Flow") -> str
             <!-- Date -->
             <div style="padding: 15px 20px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; text-align: center;">
                 <p style="color: #64748b; margin: 0; font-size: 13px;">{sale_data.get('timestamp', '')}</p>
-            </div>
-            
+        </div>
+        
             <!-- Items -->
             <div style="padding: 20px;">
                 <table style="width: 100%; border-collapse: collapse;">
-                    <thead>
-                        <tr style="background-color: #f8fafc;">
+            <thead>
+                <tr style="background-color: #f8fafc;">
                             <th style="padding: 12px 8px; text-align: left; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Item</th>
                             <th style="padding: 12px 8px; text-align: center; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Qty</th>
                             <th style="padding: 12px 8px; text-align: right; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Price</th>
                             <th style="padding: 12px 8px; text-align: right; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Total</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {items_html}
-                    </tbody>
-                </table>
-                
+                </tr>
+            </thead>
+            <tbody>
+                {items_html}
+            </tbody>
+        </table>
+        
                 <!-- Total -->
                 <div style="margin-top: 20px; padding: 20px; background-color: #f8fafc; border-radius: 8px;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -241,8 +241,8 @@ def generate_receipt_html(sale_data: dict, store_name: str = "Kash-Flow") -> str
                     </div>
                     {payment_section}
                 </div>
-            </div>
-            
+        </div>
+        
             <!-- Footer -->
             <div style="padding: 20px; text-align: center; border-top: 1px solid #e2e8f0;">
                 <p style="color: #059669; font-weight: 600; margin: 0 0 5px 0;">Thank you for your purchase! 🎉</p>
@@ -287,29 +287,29 @@ def generate_low_stock_email(products: List[dict], store_name: str = "Kash-Flow"
                 <div style="font-size: 40px; margin-bottom: 10px;">⚠️</div>
                 <h1 style="color: white; margin: 0; font-size: 22px;">Low Stock Alert</h1>
                 <p style="color: rgba(255,255,255,0.9); margin: 8px 0 0 0;">{len(products)} product(s) need restocking</p>
-            </div>
-            
+        </div>
+        
             <!-- Products Table -->
             <div style="padding: 20px;">
                 <table style="width: 100%; border-collapse: collapse;">
-                    <thead>
-                        <tr style="background-color: #f8fafc;">
+            <thead>
+                <tr style="background-color: #f8fafc;">
                             <th style="padding: 12px 8px; text-align: left; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Product</th>
                             <th style="padding: 12px 8px; text-align: left; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Product Code</th>
                             <th style="padding: 12px 8px; text-align: center; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #e2e8f0;">Stock</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {items_html}
-                    </tbody>
-                </table>
+                </tr>
+            </thead>
+            <tbody>
+                {items_html}
+            </tbody>
+        </table>
             </div>
-            
+        
             <!-- Action -->
             <div style="padding: 20px; background-color: #fef2f2; border-top: 1px solid #fecaca;">
                 <p style="color: #991b1b; margin: 0; text-align: center;">
-                    Please restock these items soon to avoid running out.
-                </p>
+            Please restock these items soon to avoid running out.
+        </p>
             </div>
             
             <!-- Footer -->

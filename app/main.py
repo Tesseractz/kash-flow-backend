@@ -311,7 +311,10 @@ def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None):
 def get_reports(date_utc: Optional[str] = None, ctx: RequestContext = Depends(get_current_context)):
     """
     Returns totals for the given UTC date (YYYY-MM-DD). Defaults to today (UTC).
+    Admin only - contains sensitive financial data.
     """
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
     _, totals, transactions = _build_daily_report(ctx, date_utc)
     return {
         "totals": totals,
@@ -349,6 +352,8 @@ def get_billing_config():
 
 @app.post("/billing/checkout")
 def create_checkout_session(body: CheckoutRequest, ctx: RequestContext = Depends(get_current_context)):
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
     stripe = get_stripe_client()
     supa = get_supabase_client()
     
@@ -400,6 +405,8 @@ def create_checkout_session(body: CheckoutRequest, ctx: RequestContext = Depends
 @app.post("/billing/portal")
 def create_customer_portal(ctx: RequestContext = Depends(get_current_context)):
     """Create a Stripe customer portal session for managing subscription."""
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
     stripe = get_stripe_client()
     supa = get_supabase_client()
     
@@ -546,6 +553,24 @@ async def stripe_webhook(request: Request):
 
 
 # Plan Info endpoint
+@app.get("/profile")
+def get_profile(ctx: RequestContext = Depends(get_current_context)):
+    """Get current user's profile including role."""
+    supabase = get_supabase_client()
+    try:
+        prof_result = supabase.table("profiles").select("*").eq("id", ctx.user_id).single().execute()
+        if not prof_result.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        return {
+            "id": prof_result.data["id"],
+            "name": prof_result.data.get("name"),
+            "role": prof_result.data.get("role", "cashier"),
+            "store_id": prof_result.data.get("store_id"),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/plan")
 def get_current_plan(ctx: RequestContext = Depends(get_current_context)):
     return get_plan_info(ctx.store_id)
@@ -594,6 +619,8 @@ def export_reports_csv(
     date_utc: Optional[str] = None,
     ctx: RequestContext = Depends(get_current_context)
 ):
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
     limits = get_store_plan(ctx.store_id)
     if not limits.allow_csv_export:
         raise HTTPException(status_code=402, detail="CSV export requires Pro or Business plan")
@@ -720,6 +747,8 @@ def get_store_analytics(
     days: int = 30,
     ctx: RequestContext = Depends(get_current_context)
 ):
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
     limits = get_store_plan(ctx.store_id)
     if not limits.allow_advanced_reports:
         raise HTTPException(status_code=402, detail="Advanced analytics require Pro or Business plan")
@@ -914,9 +943,9 @@ def send_daily_summary_notification(
         )
         result = send_email(email_to_use, subject, html_body)
         results.append(result.model_dump())
-
+    
     all_success = all(r.get("success", False) for r in results) if results else True
-
+    
     return NotificationResponse(
         success=all_success,
         results=results,
