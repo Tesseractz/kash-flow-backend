@@ -1,6 +1,9 @@
 import os
 from datetime import datetime, timezone, date
 from typing import List, Optional
+import base64
+import hashlib
+from cryptography.fernet import Fernet
 
 from fastapi import FastAPI, HTTPException, Response, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -289,7 +292,18 @@ def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None):
     # Compute profit using current product cost_price (fallback 0 if absent)
     try:
         products_res = supabase.table("products").select("id,cost_price").eq("store_id", ctx.store_id).execute()
-        cost_by_id = {int(p["id"]): float(p.get("cost_price", 0) or 0) for p in (products_res.data or [])}
+        cost_by_id = {}
+        for p in (products_res.data or []):
+            pid = int(p["id"])
+            cost_val = p.get("cost_price")
+            # Handle None, 0, or numeric values
+            if cost_val is None:
+                cost_by_id[pid] = 0.0
+            else:
+                try:
+                    cost_by_id[pid] = float(cost_val)
+                except (ValueError, TypeError):
+                    cost_by_id[pid] = 0.0
     except Exception:
         cost_by_id = {}
     total_profit = 0.0
@@ -297,7 +311,11 @@ def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None):
         pid = int(tx["product_id"])
         qty = int(tx["quantity_sold"])
         cost = cost_by_id.get(pid, 0.0)
-        total_profit += float(tx["total_price"]) - (cost * qty)
+        revenue = float(tx["total_price"])
+        profit = revenue - (cost * qty)
+        total_profit += profit
+        # Add profit to transaction object (ensure it's a float)
+        tx["profit"] = round(float(profit), 2)
 
     totals = {
         "total_sales_count": total_sales_count,
@@ -558,15 +576,522 @@ def get_profile(ctx: RequestContext = Depends(get_current_context)):
     """Get current user's profile including role."""
     supabase = get_supabase_client()
     try:
-        prof_result = supabase.table("profiles").select("*").eq("id", ctx.user_id).single().execute()
-        if not prof_result.data:
-            raise HTTPException(status_code=404, detail="Profile not found")
+        # Get profile from database to include name
+        prof_result = supabase.table("profiles").select("*").eq("id", ctx.user_id).execute()
+        
+        if prof_result.data and len(prof_result.data) > 0:
+            profile_data = prof_result.data[0]
+            return {
+                "id": profile_data["id"],
+                "name": profile_data.get("name"),
+                "role": profile_data.get("role", ctx.role),  # Fallback to context role
+                "store_id": profile_data.get("store_id", ctx.store_id),
+            }
+        else:
+            # Profile should exist because get_current_context creates it, but return context data as fallback
+            return {
+                "id": ctx.user_id,
+                "name": None,
+                "role": ctx.role,
+                "store_id": ctx.store_id,
+            }
+    except Exception as e:
+        # If database query fails, return data from context as fallback
+        print(f"[Profile API] Error fetching profile: {e}")
         return {
-            "id": prof_result.data["id"],
-            "name": prof_result.data.get("name"),
-            "role": prof_result.data.get("role", "cashier"),
-            "store_id": prof_result.data.get("store_id"),
+            "id": ctx.user_id,
+            "name": None,
+            "role": ctx.role,
+            "store_id": ctx.store_id,
         }
+
+
+# User Management endpoints (Admin only)
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    name: Optional[str] = None
+    role: str
+    created_at: Optional[str] = None
+    password: Optional[str] = None  # Password for newly created accounts
+    login_username: Optional[str] = None  # Username/email to use for login
+
+
+class InviteUserRequest(BaseModel):
+    role: str = "cashier"  # 'admin' or 'cashier'
+    # Username and password are always auto-generated
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role: str  # 'admin' or 'cashier'
+
+
+@app.get("/users", response_model=List[UserResponse])
+def list_users(ctx: RequestContext = Depends(get_current_context)):
+    """List all users in the current store. Admin only."""
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    
+    supabase = get_supabase_client()
+    import httpx
+    
+    try:
+        # Get all profiles for this store
+        prof_result = supabase.table("profiles").select("*").eq("store_id", ctx.store_id).execute()
+        
+        if not prof_result.data:
+            return []
+        
+        # Get user emails from auth.users via REST API
+        supabase_url = os.getenv("SUPABASE_URL")
+        service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        
+        users = []
+        for profile in prof_result.data:
+            user_id = profile["id"]
+            email = "unknown"
+            created_at = None
+            
+            try:
+                # Fetch user from auth API
+                with httpx.Client() as client:
+                    resp = client.get(
+                        f"{supabase_url}/auth/v1/admin/users/{user_id}",
+                        headers={
+                            "apikey": service_key,
+                            "Authorization": f"Bearer {service_key}"
+                        },
+                        timeout=5
+                    )
+                    if resp.status_code == 200:
+                        user_data = resp.json()
+                        email = user_data.get("email", "unknown")
+                        created_at = user_data.get("created_at")
+            except Exception:
+                pass  # Use defaults if we can't fetch
+            
+            users.append({
+                "id": user_id,
+                "email": email,
+                "name": profile.get("name"),
+                "role": profile.get("role", "cashier"),
+                "created_at": created_at,
+            })
+        
+        return users
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/users/invite", response_model=UserResponse)
+def invite_user(payload: InviteUserRequest, ctx: RequestContext = Depends(get_current_context)):
+    """Create a new user with auto-generated username and password. Admin only.
+    
+    Username and password are always auto-generated. Password is returned in response.
+    """
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    
+    if payload.role not in ("admin", "cashier"):
+        raise HTTPException(status_code=400, detail="Role must be 'admin' or 'cashier'")
+    
+    supabase = get_supabase_client()
+    import httpx
+    import secrets
+    import string
+    
+    supabase_url = os.getenv("SUPABASE_URL")
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    
+    # Auto-generate username based on role and existing users
+    try:
+        # Get existing users in this store to generate unique username
+        existing_profiles = supabase.table("profiles").select("name").eq("store_id", ctx.store_id).execute()
+        existing_names = [p.get("name", "").lower() for p in (existing_profiles.data or [])]
+        
+        # Generate unique username
+        base_name = "cashier" if payload.role == "cashier" else "admin"
+        username = base_name
+        counter = 1
+        while username.lower() in existing_names or any(name.startswith(username.lower()) for name in existing_names):
+            username = f"{base_name}{counter}"
+            counter += 1
+    except Exception:
+        # Fallback if query fails
+        username = f"cashier{secrets.randbelow(10000)}" if payload.role == "cashier" else f"admin{secrets.randbelow(10000)}"
+    
+    # Use fake email format for Supabase compatibility
+    email = f"{username}@store.local"
+    name = username
+    
+    try:
+        # Check if user already exists by searching for email
+        with httpx.Client() as client:
+            # List users and find by email
+            resp = client.get(
+                f"{supabase_url}/auth/v1/admin/users",
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}"
+                },
+                params={"page": 1, "per_page": 1000},
+                timeout=10
+            )
+            
+            existing_user = None
+            if resp.status_code == 200:
+                data = resp.json()
+                users = data.get("users", [])
+                for user in users:
+                    if user.get("email") == email:
+                        existing_user = user
+                        break
+            
+            if existing_user:
+                user_id = existing_user.get("id")
+                
+                # Check if they already have a profile in this store
+                existing_profile = supabase.table("profiles").select("*").eq("id", user_id).eq("store_id", ctx.store_id).execute()
+                if existing_profile.data:
+                    raise HTTPException(status_code=400, detail="User is already a member of this store")
+                
+                # For existing users, generate a NEW password and store it
+                # (They might have been deleted and re-added, or password was never stored)
+                password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+                
+                # Encrypt and store the password
+                try:
+                    encrypted_password = _encrypt_password(password)
+                except Exception as e:
+                    encrypted_password = None
+                
+                # Create profile with encrypted password
+                profile_data = {
+                    "id": user_id,
+                    "name": name,
+                    "role": payload.role,
+                    "store_id": ctx.store_id,
+                }
+                if encrypted_password:
+                    profile_data["temp_password_encrypted"] = encrypted_password
+                
+                # Insert profile first, then update password
+                profile_data_insert = {k: v for k, v in profile_data.items() if k != 'temp_password_encrypted'}
+                supabase.table("profiles").insert(profile_data_insert).execute()
+                
+                # Update password separately
+                if encrypted_password:
+                    import time
+                    time.sleep(0.3)
+                    try:
+                        supabase.table("profiles").update({
+                            "temp_password_encrypted": encrypted_password
+                        }).eq("id", user_id).execute()
+                    except Exception:
+                        pass
+                
+                return {
+                    "id": user_id,
+                    "email": email,
+                    "name": name,
+                    "role": payload.role,
+                    "created_at": existing_user.get("created_at"),
+                    "password": password,  # Return the NEW password
+                    "login_username": email,
+                }
+        
+        # Create new user
+        password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+        
+        with httpx.Client() as client:
+            resp = client.post(
+                f"{supabase_url}/auth/v1/admin/users",
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "email": email,
+                    "password": password,
+                    "email_confirm": True,  # Auto-confirm for username accounts
+                    "user_metadata": {"store_name": "Invited User", "username": username}
+                },
+                timeout=10
+            )
+            
+            if resp.status_code not in (200, 201):
+                raise HTTPException(status_code=500, detail=f"Failed to create user: {resp.text}")
+            
+            user_data = resp.json()
+            user_id = user_data.get("id")
+        
+        # Encrypt password for storage
+        try:
+            encrypted_password = _encrypt_password(password)
+        except Exception:
+            encrypted_password = None
+        
+        # Create profile with encrypted password
+        profile_data = {
+            "id": user_id,
+            "name": name,
+            "role": payload.role,
+            "store_id": ctx.store_id,
+        }
+        if encrypted_password:
+            profile_data["temp_password_encrypted"] = encrypted_password
+        
+        try:
+            # Insert profile (without password first to ensure insert succeeds)
+            profile_data_insert = {k: v for k, v in profile_data.items() if k != 'temp_password_encrypted'}
+            supabase.table("profiles").insert(profile_data_insert).execute()
+            
+            # ALWAYS update password separately to ensure it's stored
+            if encrypted_password:
+                import time
+                time.sleep(0.3)  # Wait for insert to complete
+                try:
+                    supabase.table("profiles").update({
+                        "temp_password_encrypted": encrypted_password
+                    }).eq("id", user_id).execute()
+                except Exception:
+                    pass
+        except Exception as e:
+            error_msg = str(e)
+            # If column doesn't exist, try without password
+            if "temp_password_encrypted" in error_msg or "column" in error_msg.lower() or "does not exist" in error_msg.lower():
+                profile_data.pop("temp_password_encrypted", None)
+                supabase.table("profiles").insert(profile_data).execute()
+            else:
+                raise
+        
+        # Always return password and login username
+        return {
+            "id": user_id,
+            "email": email,
+            "name": name,
+            "role": payload.role,
+            "created_at": user_data.get("created_at"),
+            "password": password,  # Always return password
+            "login_username": email,  # The email format used for login
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to invite user: {str(e)}")
+
+
+def _get_encryption_key() -> bytes:
+    """Get or generate encryption key for password storage."""
+    key_env = os.getenv("PASSWORD_ENCRYPTION_KEY")
+    if key_env:
+        # Use provided key (should be base64-encoded Fernet key)
+        try:
+            return base64.urlsafe_b64decode(key_env.encode())
+        except Exception:
+            # If not base64, use it as seed to generate key
+            key_hash = hashlib.sha256(key_env.encode()).digest()
+            return base64.urlsafe_b64encode(key_hash[:32])
+    else:
+        # Generate key from SUPABASE_SERVICE_ROLE_KEY as seed (fallback)
+        seed = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "default-secret-key")
+        key_hash = hashlib.sha256(seed.encode()).digest()
+        return base64.urlsafe_b64encode(key_hash[:32])
+
+
+def _encrypt_password(password: str) -> str:
+    """Encrypt password for storage."""
+    try:
+        key = _get_encryption_key()
+        f = Fernet(key)
+        encrypted = f.encrypt(password.encode())
+        return base64.urlsafe_b64encode(encrypted).decode()
+    except Exception as e:
+        # Fallback to simple base64 if encryption fails
+        return base64.urlsafe_b64encode(password.encode()).decode()
+
+
+def _decrypt_password(encrypted_password: str) -> str:
+    """Decrypt stored password."""
+    try:
+        key = _get_encryption_key()
+        f = Fernet(key)
+        encrypted_bytes = base64.urlsafe_b64decode(encrypted_password.encode())
+        decrypted = f.decrypt(encrypted_bytes)
+        return decrypted.decode()
+    except Exception:
+        # Fallback: try simple base64 decode
+        try:
+            return base64.urlsafe_b64decode(encrypted_password.encode()).decode()
+        except Exception:
+            raise HTTPException(status_code=500, detail="Failed to decrypt password")
+
+
+class UserCredentialsResponse(BaseModel):
+    id: str
+    email: str
+    name: Optional[str] = None
+    login_username: str
+    password: str
+
+
+@app.get("/users/{user_id}/credentials", response_model=UserCredentialsResponse)
+def get_user_credentials(user_id: str, ctx: RequestContext = Depends(get_current_context)):
+    """Get user credentials (username and password). Admin only."""
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    
+    supabase = get_supabase_client()
+    
+    try:
+        # Get user profile from same store
+        prof_result = supabase.table("profiles").select("*").eq("id", user_id).eq("store_id", ctx.store_id).single().execute()
+        
+        if not prof_result.data:
+            raise HTTPException(status_code=404, detail="User not found in this store")
+        
+        profile = prof_result.data
+        
+        # Get email from Supabase Auth
+        supabase_url = os.getenv("SUPABASE_URL")
+        service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        
+        import httpx
+        with httpx.Client() as client:
+            resp = client.get(
+                f"{supabase_url}/auth/v1/admin/users/{user_id}",
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}"
+                },
+                timeout=10
+            )
+            
+            if resp.status_code != 200:
+                raise HTTPException(status_code=404, detail="User not found in auth system")
+            
+            user_data = resp.json()
+            email = user_data.get("email", "")
+        
+        # Decrypt password
+        encrypted_password = profile.get("temp_password_encrypted")
+        if not encrypted_password:
+            raise HTTPException(
+                status_code=404, 
+                detail="Password not stored for this user. This user may have been created before password storage was enabled, or they may have changed their password."
+            )
+        
+        password = _decrypt_password(encrypted_password)
+        
+        return {
+            "id": user_id,
+            "email": email,
+            "name": profile.get("name"),
+            "login_username": email,
+            "password": password,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get credentials: {str(e)}")
+
+
+@app.put("/users/{user_id}/role", response_model=UserResponse)
+def update_user_role(user_id: str, payload: UpdateUserRoleRequest, ctx: RequestContext = Depends(get_current_context)):
+    """Update a user's role. Admin only."""
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    
+    if payload.role not in ("admin", "cashier"):
+        raise HTTPException(status_code=400, detail="Role must be 'admin' or 'cashier'")
+    
+    supabase = get_supabase_client()
+    
+    try:
+        # Check if user is in the same store
+        prof_result = supabase.table("profiles").select("*").eq("id", user_id).eq("store_id", ctx.store_id).single().execute()
+        
+        if not prof_result.data:
+            raise HTTPException(status_code=404, detail="User not found in this store")
+        
+        # Prevent removing the last admin
+        if payload.role == "cashier" and prof_result.data.get("role") == "admin":
+            admin_count = supabase.table("profiles").select("id", count="exact").eq("store_id", ctx.store_id).eq("role", "admin").execute()
+            if admin_count.count == 1:
+                raise HTTPException(status_code=400, detail="Cannot remove the last admin. Promote another user to admin first.")
+        
+        # Update role
+        supabase.table("profiles").update({"role": payload.role}).eq("id", user_id).eq("store_id", ctx.store_id).execute()
+        
+        # Get updated profile
+        updated = supabase.table("profiles").select("*").eq("id", user_id).single().execute()
+        
+        # Get user email
+        supabase_url = os.getenv("SUPABASE_URL")
+        service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        email = "unknown"
+        
+        try:
+            import httpx
+            with httpx.Client() as client:
+                resp = client.get(
+                    f"{supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers={
+                        "apikey": service_key,
+                        "Authorization": f"Bearer {service_key}"
+                    },
+                    timeout=5
+                )
+                if resp.status_code == 200:
+                    user_data = resp.json()
+                    email = user_data.get("email", "unknown")
+        except Exception:
+            pass
+        
+        return {
+            "id": user_id,
+            "email": email,
+            "name": updated.data.get("name"),
+            "role": payload.role,
+            "created_at": None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/users/{user_id}", status_code=204)
+def remove_user(user_id: str, ctx: RequestContext = Depends(get_current_context)):
+    """Remove a user from the store. Admin only."""
+    if ctx.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    
+    if user_id == ctx.user_id:
+        raise HTTPException(status_code=400, detail="Cannot remove yourself")
+    
+    supabase = get_supabase_client()
+    
+    try:
+        # Check if user is in the same store
+        prof_result = supabase.table("profiles").select("*").eq("id", user_id).eq("store_id", ctx.store_id).single().execute()
+        
+        if not prof_result.data:
+            raise HTTPException(status_code=404, detail="User not found in this store")
+        
+        # Prevent removing the last admin
+        if prof_result.data.get("role") == "admin":
+            admin_count = supabase.table("profiles").select("id", count="exact").eq("store_id", ctx.store_id).eq("role", "admin").execute()
+            if admin_count.count == 1:
+                raise HTTPException(status_code=400, detail="Cannot remove the last admin")
+        
+        # Delete profile (cascade will handle store relationship)
+        supabase.table("profiles").delete().eq("id", user_id).eq("store_id", ctx.store_id).execute()
+        
+        return None
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

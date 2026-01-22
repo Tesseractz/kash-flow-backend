@@ -49,13 +49,23 @@ def get_current_context(authorization: Optional[str] = Header(None)) -> RequestC
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
     token = authorization.split(" ", 1)[1]
-    payload = verify_supabase_jwt(token)
+    
+    try:
+        payload = verify_supabase_jwt(token)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+    
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
     supa = get_supabase_client()
-    prof_result = supa.table("profiles").select("*").eq("id", user_id).execute()
+    
+    try:
+        prof_result = supa.table("profiles").select("*").eq("id", user_id).execute()
+    except Exception as e:
+        print(f"[get_current_context] Error querying profiles: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     
     if prof_result.data and len(prof_result.data) > 0:
         profile = prof_result.data[0]
@@ -76,8 +86,13 @@ def get_current_context(authorization: Optional[str] = Header(None)) -> RequestC
                 else:
                     raise HTTPException(status_code=500, detail="Failed to get or create profile")
             else:
-                raise
+                print(f"[get_current_context] Error creating profile: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to create profile: {str(e)}")
     
-    store_id = profile["store_id"]
-    role = profile["role"]
+    store_id = profile.get("store_id")
+    role = profile.get("role", "cashier")
+    
+    if not store_id:
+        raise HTTPException(status_code=500, detail="Profile missing store_id")
+    
     return RequestContext(user_id=user_id, store_id=store_id, role=role)

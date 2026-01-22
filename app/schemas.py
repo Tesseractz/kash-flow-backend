@@ -43,6 +43,7 @@ class Sale(BaseModel):
     quantity_sold: int
     total_price: float
     timestamp: datetime
+    profit: Optional[float] = None  # Profit for this sale (revenue - cost)
 
 
 class ReportTotals(BaseModel):
