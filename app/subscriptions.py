@@ -36,37 +36,67 @@ class PlanLimits:
         return False
 
     @property
+    def is_on_trial(self) -> bool:
+        """Check if user is currently on an active trial."""
+        return self.status == "trialing" and self._is_trial_active
+
+    @property
     def max_products(self) -> Optional[int]:
-        if not self.is_active:
-            return 10
-        return None
+        # During trial: unlimited products
+        if self.is_on_trial:
+            return None
+        # Active PAID subscription (pro/business): unlimited
+        if self.is_active and self.plan in ("pro", "business"):
+            return None
+        # Free or expired: 10 products
+        return 10
 
     @property
     def max_users(self) -> int:
-        if not self.is_active:
-            return 1
-        elif self.plan == "pro":
-            return 3
-        return 999
+        # During trial: unlimited users (full access)
+        if self.is_on_trial:
+            return 999
+        # Active PAID subscription: based on plan
+        if self.is_active and self.plan in ("pro", "business"):
+            if self.plan == "pro":
+                return 3
+            return 999  # Business
+        # Free or expired: 1 user only
+        return 1
 
     @property
     def allow_multiple_users(self) -> bool:
+        # During trial: full access
+        if self.is_on_trial:
+            return True
         return self.is_active and self.plan == "business"
 
     @property
     def allow_csv_export(self) -> bool:
+        # During trial: full access
+        if self.is_on_trial:
+            return True
         return self.is_active and self.plan in ("pro", "business")
 
     @property
     def allow_low_stock_alerts(self) -> bool:
+        # During trial: full access
+        if self.is_on_trial:
+            return True
         return self.is_active and self.plan in ("pro", "business")
 
     @property
     def allow_audit_logs(self) -> bool:
+        # During trial: full access
+        if self.is_on_trial:
+            return True
         return self.is_active and self.plan == "business"
 
     @property
     def allow_advanced_reports(self) -> bool:
+        # During trial: full access
+        if self.is_on_trial:
+            return True
         return self.is_active and self.plan in ("pro", "business")
 
 
@@ -115,6 +145,7 @@ def get_plan_info(store_id: str) -> dict:
         "plan": limits.plan,
         "status": limits.status,
         "is_active": limits.is_active,
+        "is_on_trial": limits.is_on_trial,
         "trial_end": sub_data.get("trial_end"),
         "current_period_end": sub_data.get("current_period_end"),
         "has_stripe_subscription": bool(sub_data.get("stripe_subscription_id")),

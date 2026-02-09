@@ -226,8 +226,8 @@ def get_analytics(store_id: str, days: int = 30) -> AnalyticsSummary:
         
         product = products.get(pid)
         if product:
-            price = float(product.get("price", 0))
-            cost = float(product.get("cost_price", 0))
+            price = float(product.get("price", 0) or 0)
+            cost = float(product.get("cost_price", 0) or 0)
             product_stats[pid]["profit"] += (price - cost) * qty
     
     top_products = []

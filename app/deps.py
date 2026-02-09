@@ -14,16 +14,21 @@ class RequestContext:
 def _create_store_and_profile(supa, user_id: str, user_metadata: dict) -> dict:
     """Create store, profile, and subscription for a new user."""
     store_name = user_metadata.get("store_name", "My Store")
-    
-    store_result = supa.table("stores").insert({
-        "name": store_name,
-        "owner_id": user_id
-    }).execute()
-    
-    if not store_result.data:
-        raise HTTPException(status_code=500, detail="Failed to create store")
-    
-    store_id = store_result.data[0]["id"]
+
+    # Re-use existing store for this owner if it already exists, otherwise create one.
+    existing_store = supa.table("stores").select("id").eq("owner_id", user_id).limit(1).execute()
+    if existing_store.data:
+        store_id = existing_store.data[0]["id"]
+    else:
+        store_result = supa.table("stores").insert({
+            "name": store_name,
+            "owner_id": user_id
+        }).execute()
+
+        if not store_result.data:
+            raise HTTPException(status_code=500, detail="Failed to create store")
+
+        store_id = store_result.data[0]["id"]
     
     profile_result = supa.table("profiles").insert({
         "id": user_id,
@@ -33,14 +38,18 @@ def _create_store_and_profile(supa, user_id: str, user_metadata: dict) -> dict:
     }).execute()
     
     if not profile_result.data:
-        supa.table("stores").delete().eq("id", store_id).execute()
+        # Profile creation failed – do not delete the store because it might already
+        # be referenced by an existing profile in a race condition.
         raise HTTPException(status_code=500, detail="Failed to create profile")
-    
-    supa.table("subscriptions").insert({
-        "store_id": store_id,
-        "plan": "free",
-        "status": "active"
-    }).execute()
+
+    # Ensure there is exactly one subscription row for this store.
+    existing_sub = supa.table("subscriptions").select("id").eq("store_id", store_id).limit(1).execute()
+    if not existing_sub.data:
+        supa.table("subscriptions").insert({
+            "store_id": store_id,
+            "plan": "free",
+            "status": "active"
+        }).execute()
     
     return profile_result.data[0]
 
