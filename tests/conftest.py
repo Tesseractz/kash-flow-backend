@@ -1,5 +1,5 @@
 """
-Pytest configuration and fixtures for testing Kash-Flow API.
+Pytest configuration and fixtures for testing KashPoint API.
 """
 import os
 import sys

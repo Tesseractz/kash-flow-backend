@@ -1,5 +1,5 @@
 """
-Integration tests for Kash-Flow API endpoints.
+Integration tests for KashPoint API endpoints.
 Uses FastAPI TestClient with mocked Supabase.
 """
 import os

@@ -71,7 +71,7 @@ def send_email(
     # IMPORTANT: This email MUST be verified in Brevo dashboard
     # Go to: Settings > Senders & IP > Add a Sender
     sender_email = os.getenv("BREVO_SENDER_EMAIL")
-    sender_name = os.getenv("BREVO_SENDER_NAME", "Kash-Flow")
+    sender_name = os.getenv("BREVO_SENDER_NAME", "KashPoint")
     
     if not sender_email:
         return NotificationResult(
@@ -146,7 +146,7 @@ def send_email(
         )
 
 
-def generate_receipt_html(sale_data: dict, store_name: str = "Kash-Flow") -> str:
+def generate_receipt_html(sale_data: dict, store_name: str = "KashPoint") -> str:
     """Generate HTML receipt for email."""
     items_html = ""
     for item in sale_data.get("items", []):
@@ -246,7 +246,7 @@ def generate_receipt_html(sale_data: dict, store_name: str = "Kash-Flow") -> str
             <!-- Footer -->
             <div style="padding: 20px; text-align: center; border-top: 1px solid #e2e8f0;">
                 <p style="color: #059669; font-weight: 600; margin: 0 0 5px 0;">Thank you for your purchase! 🎉</p>
-                <p style="color: #94a3b8; font-size: 12px; margin: 0;">Powered by Kash-Flow</p>
+                <p style="color: #94a3b8; font-size: 12px; margin: 0;">Powered by KashPoint</p>
             </div>
         </div>
     </body>
@@ -254,7 +254,7 @@ def generate_receipt_html(sale_data: dict, store_name: str = "Kash-Flow") -> str
     """
 
 
-def generate_low_stock_email(products: List[dict], store_name: str = "Kash-Flow") -> tuple:
+def generate_low_stock_email(products: List[dict], store_name: str = "KashPoint") -> tuple:
     """Generate low stock alert email. Returns (subject, html_body)."""
     items_html = ""
     for p in products:
@@ -314,7 +314,7 @@ def generate_low_stock_email(products: List[dict], store_name: str = "Kash-Flow"
             
             <!-- Footer -->
             <div style="padding: 15px; text-align: center; border-top: 1px solid #e2e8f0;">
-                <p style="color: #94a3b8; font-size: 12px; margin: 0;">Sent by Kash-Flow</p>
+                <p style="color: #94a3b8; font-size: 12px; margin: 0;">Sent by KashPoint</p>
             </div>
         </div>
     </body>
@@ -324,7 +324,7 @@ def generate_low_stock_email(products: List[dict], store_name: str = "Kash-Flow"
     return subject, html_body
 
 
-def generate_daily_summary_email(summary: dict, store_name: str = "Kash-Flow") -> tuple:
+def generate_daily_summary_email(summary: dict, store_name: str = "KashPoint") -> tuple:
     """Generate daily finance summary email. Returns (subject, html_body)."""
     date_label = summary.get("date_label", "Today")
     totals = summary.get("totals", {})
@@ -366,7 +366,7 @@ def generate_daily_summary_email(summary: dict, store_name: str = "Kash-Flow") -
                 </div>
             </div>
             <div style="padding: 15px; text-align: center; border-top: 1px solid #e2e8f0;">
-                <p style="color: #94a3b8; font-size: 12px; margin: 0;">Sent by Kash-Flow</p>
+                <p style="color: #94a3b8; font-size: 12px; margin: 0;">Sent by KashPoint</p>
             </div>
         </div>
     </body>

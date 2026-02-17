@@ -58,7 +58,7 @@ from .stripe_client import get_stripe_client, get_publishable_key
 import csv
 import io
 
-app = FastAPI(title="Kash-Flow API", version="1.0.0")
+app = FastAPI(title="KashPoint API", version="1.0.0")
 
 # CORS
 cors_origins_env = os.getenv("BACKEND_CORS_ORIGINS", "")
@@ -1740,7 +1740,7 @@ def send_daily_summary_notification(
             )
 
     if request.send_email and email_to_use:
-        store_name = "Kash-Flow"
+        store_name = "KashPoint"
         try:
             store_res = supabase.table("stores").select("name").eq("id", ctx.store_id).single().execute()
             store_name = store_res.data.get("name") or store_name
@@ -1809,7 +1809,7 @@ def send_receipt(
         html_body = generate_receipt_html(sale_data)
         result = send_email(
             request.customer_email,
-            f"Receipt #{sale['id']} - Kash-Flow",
+            f"Receipt #{sale['id']} - KashPoint",
             html_body
         )
         results.append(result.model_dump())
