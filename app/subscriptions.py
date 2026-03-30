@@ -100,7 +100,9 @@ class PlanLimits:
 
 def get_store_plan(store_id: str) -> PlanLimits:
     if DEV_PLAN_OVERRIDE in ("pro", "business"):
-        return PlanLimits(DEV_PLAN_OVERRIDE, status="active")
+        # Single-plan billing: normalize legacy "business" to "pro"
+        normalized = "pro" if DEV_PLAN_OVERRIDE == "business" else DEV_PLAN_OVERRIDE
+        return PlanLimits(normalized, status="active")
     
     supa = get_supabase_client()
     try:
@@ -110,7 +112,9 @@ def get_store_plan(store_id: str) -> PlanLimits:
         status = data.get("status", "expired")
         trial_end = data.get("trial_end")
         
-        return PlanLimits(plan, status=status, trial_end=trial_end)
+        # Single-plan billing: normalize legacy "business" to "pro" for limits
+        normalized = "pro" if plan == "business" else plan
+        return PlanLimits(normalized, status=status, trial_end=trial_end)
     except Exception:
         return PlanLimits("expired", status="expired")
 

@@ -45,14 +45,14 @@ class TestPlanLimits:
         assert limits.is_active == True
         assert limits.is_on_trial == False
         assert limits.max_products is None  # Unlimited
-        assert limits.max_users == 3
+        assert limits.max_users == 999  # Full access (single-plan billing)
         assert limits.allow_csv_export == True
         assert limits.allow_low_stock_alerts == True
-        assert limits.allow_audit_logs == False  # Only business
+        assert limits.allow_audit_logs == True
         assert limits.allow_advanced_reports == True
     
     def test_business_plan_limits(self):
-        """Test business plan has correct limits."""
+        """Test legacy business plan has correct limits."""
         from app.subscriptions import PlanLimits
         
         limits = PlanLimits("business", status="active")

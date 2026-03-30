@@ -407,7 +407,7 @@ class TestBillingAPI:
         data = response.json()
         assert "prices" in data
         assert "pro" in data["prices"]
-        assert "business" in data["prices"]
+        assert "business" not in data["prices"]
     
     @patch('app.main.get_plan_info')
     def test_get_current_plan(self, mock_plan_info, test_client):
@@ -607,16 +607,30 @@ class TestAuditLogsAPI:
         assert len(data) == 1
     
     @patch('app.main.get_store_plan')
-    def test_audit_logs_blocked_for_pro_plan(self, mock_plan, test_client):
-        """Test that pro plan cannot access audit logs."""
+    @patch('app.main.get_supabase_client')
+    def test_audit_logs_allowed_for_pro_plan(self, mock_supabase, mock_plan, test_client):
+        """Test that pro plan can access audit logs (single-plan billing)."""
         from app.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("pro", status="active")
         
+        now = datetime.now(timezone.utc).isoformat()
+        audit_logs = [
+            {"id": 1, "user_id": "user-1", "action": "create", "resource_type": "product", "resource_id": "1", "timestamp": now},
+        ]
+        mock_query = MagicMock()
+        mock_query.execute.return_value.data = audit_logs
+        mock_query.select.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        mock_query.order.return_value = mock_query
+        mock_query.limit.return_value = mock_query
+        mock_supabase.return_value.table.return_value = mock_query
+
         response = test_client.get("/audit-logs")
-        
-        assert response.status_code == 402
-        assert "Business plan" in response.json()["detail"]
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
 
 
 class TestCSVExportAPI:

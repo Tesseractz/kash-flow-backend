@@ -1,8 +1,10 @@
 import os
 from datetime import datetime, timezone, date, timedelta
-from typing import List, Optional
+from typing import List, Optional, Literal
 import base64
 import hashlib
+import time
+from collections import defaultdict, deque
 from cryptography.fernet import Fernet
 
 from fastapi import FastAPI, HTTPException, Response, Depends, Request, Query
@@ -70,11 +72,54 @@ allowed_origins = (
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # IMPORTANT: do not use ["*"] together with allow_credentials=True in production.
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Basic in-memory rate limiting (good baseline; put Cloudflare/WAF in front for real DDOS)
+_rl_window_sec = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
+_rl_max_requests = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120"))
+_rl_buckets = defaultdict(lambda: deque())
+_rl_paths = {
+    ("POST", "/billing/checkout"),
+    ("POST", "/billing/portal"),
+    ("POST", "/stripe/webhook"),
+}
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    method = request.method.upper()
+    path = request.url.path
+
+    if (method, path) in _rl_paths:
+        forwarded_for = request.headers.get("x-forwarded-for")
+        ip = (forwarded_for.split(",")[0].strip() if forwarded_for else None) or (
+            request.client.host if request.client else "unknown"
+        )
+        key = f"{ip}:{method}:{path}"
+        now = time.time()
+        q = _rl_buckets[key]
+
+        # drop old
+        while q and (now - q[0]) > _rl_window_sec:
+            q.popleft()
+
+        if len(q) >= _rl_max_requests:
+            return Response(
+                content='{"detail":"Too many requests"}',
+                status_code=429,
+                media_type="application/json",
+                headers={"Retry-After": str(_rl_window_sec)},
+            )
+
+        q.append(now)
+
+    return await call_next(request)
 
 
 def _now_utc_iso() -> str:
@@ -546,7 +591,8 @@ def get_reports(
 
 # Billing endpoints
 class CheckoutRequest(BaseModel):
-    plan: str  # 'pro' or 'business'
+    # Single-plan billing: backend only accepts "pro"
+    plan: Literal["pro"]
 
 
 @app.get("/billing/config")
@@ -560,14 +606,7 @@ def get_billing_config():
                 "amount": 25000,
                 "currency": "ZAR",
                 "name": "Pro Plan",
-                "description": "Unlimited products, 3 users, CSV export, low-stock alerts"
-            },
-            "business": {
-                "id": os.getenv("STRIPE_BUSINESS_PRICE_ID", ""),
-                "amount": 35000,
-                "currency": "ZAR",
-                "name": "Business Plan",
-                "description": "Everything in Pro + unlimited users, audit logs"
+                "description": "Full access with a 30-day free trial"
             }
         }
     }
@@ -597,15 +636,13 @@ def create_checkout_session(body: CheckoutRequest, ctx: RequestContext = Depends
             "stripe_customer_id": customer_id,
         }).execute()
     
-    price_map = {
-        "pro": os.getenv("STRIPE_PRO_PRICE_ID", ""),
-    }
-    price_id = price_map.get(body.plan)
+    requested_plan = body.plan  # enforced by schema
+    price_id = os.getenv("STRIPE_PRO_PRICE_ID", "")
     if not price_id:
         raise HTTPException(status_code=400, detail="Invalid plan or missing price ID. Set STRIPE_PRO_PRICE_ID in .env")
     
     # Use FRONTEND_URL for redirects (set in .env)
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    frontend_url = (os.getenv("FRONTEND_URL", "http://localhost:5173") or "").rstrip("/")
     success_url = f"{frontend_url}/billing?success=1"
     cancel_url = f"{frontend_url}/billing?canceled=1"
     
@@ -618,9 +655,9 @@ def create_checkout_session(body: CheckoutRequest, ctx: RequestContext = Depends
         payment_method_collection="always",  # Require credit card even for trial
         subscription_data={
             "trial_period_days": 30,  # 30-day free trial (1 month)
-            "metadata": {"store_id": ctx.store_id, "plan": body.plan}
+            "metadata": {"store_id": ctx.store_id, "plan": requested_plan}
         },
-        metadata={"store_id": ctx.store_id, "plan": body.plan},
+        metadata={"store_id": ctx.store_id, "plan": requested_plan},
     )
     return {"url": session["url"]}
 
@@ -644,7 +681,7 @@ def create_customer_portal(ctx: RequestContext = Depends(get_current_context)):
         raise HTTPException(status_code=400, detail="No Stripe customer found. Please subscribe first.")
     
     # Use FRONTEND_URL for redirects (set in .env)
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    frontend_url = (os.getenv("FRONTEND_URL", "http://localhost:5173") or "").rstrip("/")
     return_url = f"{frontend_url}/billing"
     
     session = stripe.billing_portal.Session.create(
@@ -660,7 +697,6 @@ async def stripe_webhook(request: Request):
     payload = await request.body()
     sig = request.headers.get("stripe-signature")
     stripe = get_stripe_client()
-    supa = get_supabase_client()
     webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
     
     if not webhook_secret:
@@ -680,12 +716,19 @@ async def stripe_webhook(request: Request):
     
     event_type = event["type"]
     print(f"[Stripe Webhook] Received event: {event_type}")
+
+    # Only hit DB after signature verification succeeded
+    supa = get_supabase_client()
     
     if event_type in ("customer.subscription.created", "customer.subscription.updated"):
         sub = event["data"]["object"]
         store_id = sub.get("metadata", {}).get("store_id")
         plan = sub.get("metadata", {}).get("plan", "pro")
         status = sub.get("status", "active")
+
+        # Single-plan billing: normalize any legacy "business" to "pro"
+        if plan == "business":
+            plan = "pro"
         
         if store_id:
             period_end = sub.get("current_period_end")

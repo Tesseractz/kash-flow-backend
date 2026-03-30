@@ -453,3 +453,85 @@ class TestLegalAPI:
             assert "effective_date" in response.json()
         finally:
             app.dependency_overrides.clear()
+
+
+# ============================================
+# EXTRA EDGE-CASE COVERAGE
+# ============================================
+class TestPrivacyEdgeCases:
+
+    def test_privacy_endpoints_require_auth(self, client):
+        """Privacy endpoints should require a bearer token (no dependency override)."""
+        app.dependency_overrides.clear()
+        response = client.get("/privacy/cookies")
+        assert response.status_code == 401
+        assert "Missing token" in response.json()["detail"]
+
+    @patch("app.main.get_supabase_client")
+    def test_save_cookie_preferences_forces_essential_true(self, mock_supabase, client, user_context):
+        """Even if client sends essential=false, backend must store/return essential=true."""
+        mock_client = MagicMock()
+        mock_supabase.return_value = mock_client
+
+        # Return data that matches what the endpoint persists (essential=True)
+        mock_client.table().upsert().execute.return_value = MagicMock(data=[{
+            "user_id": user_context.user_id,
+            "essential": True,
+            "analytics": False,
+            "marketing": False,
+            "functional": True
+        }])
+
+        app.dependency_overrides[get_current_context] = lambda: user_context
+        try:
+            response = client.post("/privacy/cookies", json={
+                "essential": False,
+                "analytics": False,
+                "marketing": False,
+                "functional": True
+            })
+            assert response.status_code == 200
+            assert response.json()["essential"] is True
+        finally:
+            app.dependency_overrides.clear()
+
+    @patch("app.main.get_supabase_client")
+    def test_save_cookie_preferences_returns_500_on_supabase_error(self, mock_supabase, client, user_context):
+        """Server should return 500 if persistence fails."""
+        mock_client = MagicMock()
+        mock_supabase.return_value = mock_client
+        mock_client.table().upsert().execute.side_effect = Exception("db down")
+
+        app.dependency_overrides[get_current_context] = lambda: user_context
+        try:
+            response = client.post("/privacy/cookies", json={
+                "essential": True,
+                "analytics": True,
+                "marketing": False,
+                "functional": True
+            })
+            assert response.status_code == 500
+            assert "db down" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.clear()
+
+
+class TestAccountDeletionEdgeCases:
+
+    @patch("app.main.get_supabase_client")
+    def test_cancel_account_deletion_404_when_not_found(self, mock_supabase, client, user_context):
+        """Cancel should 404 if request is missing/already processed."""
+        mock_client = MagicMock()
+        mock_supabase.return_value = mock_client
+
+        # No rows updated -> should 404
+        mock_client.table().update().eq().eq().in_().execute.return_value = MagicMock(data=[])
+
+        request_id = str(uuid4())
+        app.dependency_overrides[get_current_context] = lambda: user_context
+        try:
+            response = client.delete(f"/privacy/delete-account/{request_id}")
+            assert response.status_code == 404
+            assert "not found" in response.json()["detail"].lower()
+        finally:
+            app.dependency_overrides.clear()
