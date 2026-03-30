@@ -1,11 +1,11 @@
 import os
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from typing import List, Optional
 import base64
 import hashlib
 from cryptography.fernet import Fernet
 
-from fastapi import FastAPI, HTTPException, Response, Depends, Request
+from fastapi import FastAPI, HTTPException, Response, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -55,6 +55,7 @@ from .schemas import (
 from .deps import get_current_context, RequestContext
 from .subscriptions import enforce_limits_on_create_product, get_store_plan, get_plan_info
 from .stripe_client import get_stripe_client, get_publishable_key
+from .push import get_vapid_public_key, send_web_push
 import csv
 import io
 
@@ -222,6 +223,27 @@ def update_product(product_id: int, payload: ProductUpdate, ctx: RequestContext 
             product = existing.data
         
         log_audit_event(ctx.store_id, ctx.user_id, "update", "product", str(product_id), f"Updated product fields: {list(update_data.keys())}")
+        # Best-effort: send low-stock device push if product is now below threshold.
+        try:
+            settings = _fetch_notification_settings(supabase, ctx.store_id)
+            threshold = int(settings.get("low_stock_threshold") or 10)
+            qty = int(product.get("quantity") or 0)
+            if qty <= threshold:
+                subs = (
+                    supabase.table("push_subscriptions")
+                    .select("endpoint,p256dh,auth")
+                    .eq("store_id", ctx.store_id)
+                    .execute()
+                ).data or []
+                if subs:
+                    send_web_push(
+                        subs,
+                        title=f"Low stock: {product.get('name') or 'Product'}",
+                        body=f"Only {qty} left in stock.",
+                        url="/products",
+                    )
+        except Exception:
+            pass
         return product
     except HTTPException:
         raise
@@ -274,6 +296,36 @@ def create_sale(payload: SaleCreate, ctx: RequestContext = Depends(get_current_c
         
         if sale:
             log_audit_event(ctx.store_id, ctx.user_id, "create", "sale", str(sale.get("id", "")), f"Sale: product {payload.product_id}, qty {payload.quantity_sold}")
+            # Best-effort: if this sale caused low stock, send a device push notification.
+            try:
+                settings = _fetch_notification_settings(supabase, ctx.store_id)
+                threshold = int(settings.get("low_stock_threshold") or 10)
+                prod_res = (
+                    supabase.table("products")
+                    .select("id,name,quantity")
+                    .eq("store_id", ctx.store_id)
+                    .eq("id", payload.product_id)
+                    .single()
+                    .execute()
+                )
+                p = prod_res.data or {}
+                qty = int(p.get("quantity") or 0)
+                if qty <= threshold:
+                    subs = (
+                        supabase.table("push_subscriptions")
+                        .select("endpoint,p256dh,auth")
+                        .eq("store_id", ctx.store_id)
+                        .execute()
+                    ).data or []
+                    if subs:
+                        send_web_push(
+                            subs,
+                            title=f"Low stock: {p.get('name') or 'Product'}",
+                            body=f"Only {qty} left in stock.",
+                            url="/products",
+                        )
+            except Exception:
+                pass
             return sale
         else:
             raise HTTPException(status_code=500, detail="Sale failed")
@@ -368,21 +420,53 @@ def process_return(payload: ReturnCreate, ctx: RequestContext = Depends(get_curr
 
 
 # Reports
-def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None):
+def _report_day_bounds(date_str: Optional[str], tz_name: Optional[str]):
     """
-    Returns (target_date, totals, transactions) for the given UTC date (YYYY-MM-DD).
+    Return (day_start_utc_iso, day_end_utc_iso, target_date) for the given date.
+    If tz_name is provided (e.g. 'Africa/Johannesburg'), the date is interpreted as that
+    timezone's calendar day; otherwise it is treated as UTC. Defaults to today UTC if date_str is None.
     """
-    supabase = get_supabase_client()
-    if date_utc:
+    if date_str:
         try:
-            target_date = datetime.fromisoformat(date_utc).date()
+            target_date = datetime.fromisoformat(date_str).date()
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     else:
         target_date = datetime.now(timezone.utc).date()
 
-    day_start = datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
-    day_end = datetime.combine(target_date, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+    tz = None
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz_name)
+        except ImportError:
+            raise HTTPException(status_code=500, detail="Timezone support requires Python 3.9+ (zoneinfo)")
+        except Exception:
+            # On Windows, ZoneInfo often needs: pip install tzdata
+            import logging
+            logging.getLogger(__name__).warning(
+                "Timezone %r not available, using UTC. On Windows install: pip install tzdata", tz_name
+            )
+
+    if tz is not None:
+        start_local = datetime.combine(target_date, datetime.min.time(), tzinfo=tz)
+        end_local = datetime.combine(target_date, datetime.max.time(), tzinfo=tz)
+        day_start = start_local.astimezone(timezone.utc).isoformat()
+        day_end = end_local.astimezone(timezone.utc).isoformat()
+    else:
+        day_start = datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+        day_end = datetime.combine(target_date, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+
+    return day_start, day_end, target_date
+
+
+def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None, timezone_name: Optional[str] = None):
+    """
+    Returns (target_date, totals, transactions) for the given date (YYYY-MM-DD).
+    If timezone_name is set, the date is the calendar day in that timezone; otherwise UTC.
+    """
+    supabase = get_supabase_client()
+    day_start, day_end, target_date = _report_day_bounds(date_utc, timezone_name)
 
     try:
         sales_res = (
@@ -401,14 +485,14 @@ def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None):
     total_sales_count = len(transactions)
     total_revenue = float(sum(float(tx["total_price"]) for tx in transactions))
 
-    # Compute profit using current product cost_price (fallback 0 if absent)
+    # Compute profit and enrich with product name/image
     try:
-        products_res = supabase.table("products").select("id,cost_price").eq("store_id", ctx.store_id).execute()
+        products_res = supabase.table("products").select("id,name,image_url,cost_price").eq("store_id", ctx.store_id).execute()
         cost_by_id = {}
+        product_info_by_id = {}
         for p in (products_res.data or []):
             pid = int(p["id"])
             cost_val = p.get("cost_price")
-            # Handle None, 0, or numeric values
             if cost_val is None:
                 cost_by_id[pid] = 0.0
             else:
@@ -416,8 +500,10 @@ def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None):
                     cost_by_id[pid] = float(cost_val)
                 except (ValueError, TypeError):
                     cost_by_id[pid] = 0.0
+            product_info_by_id[pid] = {"name": p.get("name") or f"Product #{pid}", "image_url": p.get("image_url")}
     except Exception:
         cost_by_id = {}
+        product_info_by_id = {}
     total_profit = 0.0
     for tx in transactions:
         pid = int(tx["product_id"])
@@ -426,8 +512,10 @@ def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None):
         revenue = float(tx["total_price"])
         profit = revenue - (cost * qty)
         total_profit += profit
-        # Add profit to transaction object (ensure it's a float)
         tx["profit"] = round(float(profit), 2)
+        info = product_info_by_id.get(pid, {})
+        tx["product_name"] = info.get("name", f"Product #{pid}")
+        tx["product_image_url"] = info.get("image_url")
 
     totals = {
         "total_sales_count": total_sales_count,
@@ -438,14 +526,19 @@ def _build_daily_report(ctx: RequestContext, date_utc: Optional[str] = None):
 
 
 @app.get("/reports", response_model=ReportResponse)
-def get_reports(date_utc: Optional[str] = None, ctx: RequestContext = Depends(get_current_context)):
+def get_reports(
+    date_utc: Optional[str] = None,
+    tz: Optional[str] = Query(None, alias="timezone"),
+    ctx: RequestContext = Depends(get_current_context),
+):
     """
-    Returns totals for the given UTC date (YYYY-MM-DD). Defaults to today (UTC).
+    Returns totals for the given date (YYYY-MM-DD). If tz is provided (e.g. Africa/Johannesburg),
+    the date is interpreted as that calendar day; otherwise UTC. Defaults to today.
     Admin only - contains sensitive financial data.
     """
     if ctx.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
-    _, totals, transactions = _build_daily_report(ctx, date_utc)
+    _, totals, transactions = _build_daily_report(ctx, date_utc, timezone_name=tz)
     return {
         "totals": totals,
         "transactions": transactions,
@@ -1267,6 +1360,7 @@ def get_low_stock_alerts(
 @app.get("/reports/export")
 def export_reports_csv(
     date_utc: Optional[str] = None,
+    tz: Optional[str] = Query(None, alias="timezone"),
     ctx: RequestContext = Depends(get_current_context)
 ):
     if ctx.role != "admin":
@@ -1274,18 +1368,9 @@ def export_reports_csv(
     limits = get_store_plan(ctx.store_id)
     if not limits.allow_csv_export:
         raise HTTPException(status_code=402, detail="CSV export requires Pro or Business plan")
-    
-    supabase = get_supabase_client()
-    if date_utc:
-        try:
-            target_date = datetime.fromisoformat(date_utc).date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-    else:
-        target_date = datetime.now(timezone.utc).date()
 
-    day_start = datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
-    day_end = datetime.combine(target_date, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+    day_start, day_end, target_date = _report_day_bounds(date_utc, tz)
+    supabase = get_supabase_client()
 
     try:
         sales_res = (
@@ -1589,6 +1674,74 @@ def get_notification_status(ctx: RequestContext = Depends(get_current_context)):
     return NotificationStatus(
         email_configured=is_email_configured()
     )
+
+
+# Web Push (device notifications)
+from .schemas import PushSubscriptionIn, PushSubscribeResponse
+
+
+@app.get("/push/vapid-public-key")
+def push_vapid_public_key(ctx: RequestContext = Depends(get_current_context)):
+    key = get_vapid_public_key()
+    if not key:
+        raise HTTPException(status_code=503, detail="VAPID keys not configured")
+    return {"public_key": key}
+
+
+@app.post("/push/subscribe", response_model=PushSubscribeResponse)
+def push_subscribe(
+    payload: PushSubscriptionIn,
+    request: Request,
+    ctx: RequestContext = Depends(get_current_context),
+):
+    supabase = get_supabase_client()
+    ua = request.headers.get("user-agent")
+    row = {
+        "store_id": ctx.store_id,
+        "user_id": ctx.user_id,
+        "endpoint": payload.endpoint,
+        "p256dh": payload.keys.p256dh,
+        "auth": payload.keys.auth,
+        "user_agent": ua,
+        "updated_at": _now_utc_iso(),
+    }
+    try:
+        supabase.table("push_subscriptions").upsert(row, on_conflict="endpoint").execute()
+        return PushSubscribeResponse(success=True, message="Subscribed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class PushUnsubscribeRequest(BaseModel):
+    endpoint: str
+
+
+@app.post("/push/unsubscribe", response_model=PushSubscribeResponse)
+def push_unsubscribe(
+    payload: PushUnsubscribeRequest,
+    ctx: RequestContext = Depends(get_current_context),
+):
+    supabase = get_supabase_client()
+    try:
+        supabase.table("push_subscriptions").delete().eq("store_id", ctx.store_id).eq("endpoint", payload.endpoint).execute()
+        return PushSubscribeResponse(success=True, message="Unsubscribed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/push/test")
+def push_test(ctx: RequestContext = Depends(get_current_context)):
+    supabase = get_supabase_client()
+    subs = (
+        supabase.table("push_subscriptions")
+        .select("endpoint,p256dh,auth")
+        .eq("store_id", ctx.store_id)
+        .eq("user_id", ctx.user_id)
+        .execute()
+    ).data or []
+    if not subs:
+        return {"sent": 0, "message": "No device subscriptions for this user"}
+    return send_web_push(subs, title="KashPoint test", body="Device notifications are working.", url="/")
 
 
 class SendLowStockAlertRequest(BaseModel):

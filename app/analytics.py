@@ -21,6 +21,7 @@ class TopProduct(BaseModel):
     product_id: int
     name: str
     sku: Optional[str] = None
+    image_url: Optional[str] = None
     total_sold: int
     total_revenue: float
     total_profit: float
@@ -80,7 +81,7 @@ def get_analytics(store_id: str, days: int = 30) -> AnalyticsSummary:
     
     try:
         products_res = supabase.table("products").select(
-            "id, name, sku, price, cost_price"
+            "id, name, sku, price, cost_price, image_url"
         ).eq("store_id", store_id).execute()
         
         products = {p["id"]: p for p in (products_res.data or [])}
@@ -238,6 +239,7 @@ def get_analytics(store_id: str, days: int = 30) -> AnalyticsSummary:
             product_id=pid,
             name=product.get("name", f"Product #{pid}"),
             sku=product.get("sku"),
+            image_url=product.get("image_url"),
             total_sold=stats["sold"],
             total_revenue=round(stats["revenue"], 2),
             total_profit=round(stats["profit"], 2)

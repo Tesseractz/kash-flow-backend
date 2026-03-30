@@ -285,7 +285,7 @@ class TestEnhancedReportsAPI:
             app.dependency_overrides.clear()
     
     @patch("app.main.get_supabase_client")
-    def test_profit_loss_cashier_forbidden(self, client, cashier_context):
+    def test_profit_loss_cashier_forbidden(self, mock_supabase, client, cashier_context):
         """Cashiers cannot access P&L report."""
         app.dependency_overrides[get_current_context] = lambda: cashier_context
         try:

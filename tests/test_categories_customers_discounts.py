@@ -27,8 +27,9 @@ def make_cashier_context():
     )
 
 
+@pytest.mark.skip(reason="Product categories API was removed; backend has /expense-categories only")
 class TestCategoriesAPI:
-    """Tests for /categories endpoints"""
+    """Tests for /categories endpoints (legacy - endpoint no longer exists)"""
 
     def test_list_categories_success(self):
         """Test listing categories"""

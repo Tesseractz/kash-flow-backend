@@ -106,6 +106,8 @@ class Sale(BaseModel):
     timestamp: datetime
     profit: Optional[float] = None  # Profit for this sale (revenue - cost)
     customer: Optional[Customer] = None  # Nested customer object
+    product_name: Optional[str] = None  # Enriched from products table for reports
+    product_image_url: Optional[str] = None
 
 
 class ReportTotals(BaseModel):
@@ -212,6 +214,24 @@ class InventoryValuationReport(BaseModel):
     low_stock_count: int
     out_of_stock_count: int
     categories: List[dict]  # {category, quantity, cost_value, retail_value}
+
+
+# ===========================================
+# WEB PUSH NOTIFICATIONS
+# ===========================================
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str
+    keys: PushSubscriptionKeys
+
+
+class PushSubscribeResponse(BaseModel):
+    success: bool
+    message: str
 
 
 # ===========================================
