@@ -56,11 +56,9 @@ class PlanLimits:
         # During trial: unlimited users (full access)
         if self.is_on_trial:
             return 999
-        # Active PAID subscription: based on plan
+        # Active PAID subscription: Pro is full-access (single plan)
         if self.is_active and self.plan in ("pro", "business"):
-            if self.plan == "pro":
-                return 3
-            return 999  # Business
+            return 999
         # Free or expired: 1 user only
         return 1
 
@@ -69,7 +67,7 @@ class PlanLimits:
         # During trial: full access
         if self.is_on_trial:
             return True
-        return self.is_active and self.plan == "business"
+        return self.is_active and self.plan in ("pro", "business")
 
     @property
     def allow_csv_export(self) -> bool:
@@ -90,7 +88,7 @@ class PlanLimits:
         # During trial: full access
         if self.is_on_trial:
             return True
-        return self.is_active and self.plan == "business"
+        return self.is_active and self.plan in ("pro", "business")
 
     @property
     def allow_advanced_reports(self) -> bool:

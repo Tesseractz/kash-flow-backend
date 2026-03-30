@@ -599,11 +599,10 @@ def create_checkout_session(body: CheckoutRequest, ctx: RequestContext = Depends
     
     price_map = {
         "pro": os.getenv("STRIPE_PRO_PRICE_ID", ""),
-        "business": os.getenv("STRIPE_BUSINESS_PRICE_ID", ""),
     }
     price_id = price_map.get(body.plan)
     if not price_id:
-        raise HTTPException(status_code=400, detail="Invalid plan or missing price ID. Set STRIPE_PRO_PRICE_ID and STRIPE_BUSINESS_PRICE_ID in .env")
+        raise HTTPException(status_code=400, detail="Invalid plan or missing price ID. Set STRIPE_PRO_PRICE_ID in .env")
     
     # Use FRONTEND_URL for redirects (set in .env)
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
