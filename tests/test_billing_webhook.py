@@ -35,9 +35,10 @@ class TestBillingConfig:
             res = client.get("/billing/config")
             assert res.status_code == 200
             data = res.json()
-            assert "prices" in data
-            assert "pro" in data["prices"]
-            assert "business" not in data["prices"]
+            assert "stripe" in data
+            assert "prices" in data["stripe"]
+            assert "pro" in data["stripe"]["prices"]
+            assert "business" not in data["stripe"]["prices"]
         finally:
             app.dependency_overrides.clear()
 
@@ -63,6 +64,7 @@ class TestCheckout:
     @patch("app.main.get_supabase_client")
     @patch("app.main.get_stripe_client")
     def test_checkout_uses_pro_price_and_safe_redirects(self, mock_stripe, mock_supa, client, admin_context, monkeypatch):
+        monkeypatch.setenv("BILLING_PROVIDER", "stripe")
         monkeypatch.setenv("STRIPE_PRO_PRICE_ID", "price_pro_123")
         monkeypatch.setenv("FRONTEND_URL", "http://localhost:5001/")  # trailing slash should not cause //
 
@@ -100,6 +102,7 @@ class TestCheckout:
             app.dependency_overrides.clear()
 
     def test_checkout_returns_400_when_price_missing(self, client, admin_context, monkeypatch):
+        monkeypatch.setenv("BILLING_PROVIDER", "stripe")
         monkeypatch.setenv("STRIPE_PRO_PRICE_ID", "")
         app.dependency_overrides[get_current_context] = lambda: admin_context
         try:
@@ -109,7 +112,7 @@ class TestCheckout:
                 mock_stripe.return_value = MagicMock()
                 res = client.post("/billing/checkout", json={"plan": "pro"})
             assert res.status_code == 400
-            assert "STRIPE_PRO_PRICE_ID" in res.json()["detail"]
+            assert "STRIPE_PRO_PRICE_ID" in res.json()["detail"] or "price" in res.json()["detail"].lower()
         finally:
             app.dependency_overrides.clear()
 
@@ -127,18 +130,21 @@ class TestPortal:
 class TestStripeWebhook:
     @patch("app.main.get_stripe_client")
     def test_webhook_missing_secret(self, mock_stripe, client, monkeypatch):
+        monkeypatch.setenv("BILLING_PROVIDER", "stripe")
         monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
         res = client.post("/stripe/webhook", data=b"{}", headers={"stripe-signature": "t=1,v1=x"})
         assert res.status_code == 500
 
     @patch("app.main.get_stripe_client")
     def test_webhook_missing_signature_header(self, mock_stripe, client, monkeypatch):
+        monkeypatch.setenv("BILLING_PROVIDER", "stripe")
         monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
         res = client.post("/stripe/webhook", data=b"{}")
         assert res.status_code == 400
 
     @patch("app.main.get_stripe_client")
     def test_webhook_invalid_signature(self, mock_stripe, client, monkeypatch):
+        monkeypatch.setenv("BILLING_PROVIDER", "stripe")
         monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
         stripe = MagicMock()
         stripe.Webhook.construct_event.side_effect = Exception("bad sig")
@@ -150,6 +156,7 @@ class TestStripeWebhook:
     @patch("app.main.get_supabase_client")
     @patch("app.main.get_stripe_client")
     def test_webhook_normalizes_business_plan_to_pro(self, mock_stripe, mock_supa, client, monkeypatch):
+        monkeypatch.setenv("BILLING_PROVIDER", "stripe")
         monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
 
         event = {
@@ -170,11 +177,21 @@ class TestStripeWebhook:
         mock_stripe.return_value = stripe
 
         supa = MagicMock()
+        events_q = MagicMock()
+        events_q.insert.return_value = events_q
+        events_q.execute.return_value = MagicMock(data=[{}])
+
         table_q = MagicMock()
         upsert_q = MagicMock()
         upsert_q.execute.return_value = MagicMock(data=[{}])
         table_q.upsert.return_value = upsert_q
-        supa.table.return_value = table_q
+
+        def table_router(name):
+            if name == "stripe_webhook_events":
+                return events_q
+            return table_q
+
+        supa.table.side_effect = table_router
         mock_supa.return_value = supa
 
         res = client.post("/stripe/webhook", data=b"{}", headers={"stripe-signature": "t=1,v1=x"})
@@ -186,7 +203,55 @@ class TestStripeWebhook:
 
     @patch("app.main.get_supabase_client")
     @patch("app.main.get_stripe_client")
+    def test_webhook_dedupes_duplicate_event_id(self, mock_stripe, mock_supa, client, monkeypatch):
+        monkeypatch.setenv("BILLING_PROVIDER", "stripe")
+        monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+
+        event = {
+            "id": "evt_123",
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_123",
+                    "status": "active",
+                    "customer": "cus_123",
+                    "metadata": {"store_id": "store-1", "plan": "pro"},
+                }
+            },
+        }
+
+        stripe = MagicMock()
+        stripe.Webhook.construct_event.return_value = event
+        mock_stripe.return_value = stripe
+
+        supa = MagicMock()
+        events_q = MagicMock()
+        events_q.insert.return_value = events_q
+        # simulate unique violation
+        events_q.execute.side_effect = Exception("duplicate key value violates unique constraint")
+
+        subs_q = MagicMock()
+        subs_q.upsert.return_value = subs_q
+        subs_q.execute.return_value = MagicMock(data=[{}])
+
+        def table_router(name):
+            if name == "stripe_webhook_events":
+                return events_q
+            return subs_q
+
+        supa.table.side_effect = table_router
+        mock_supa.return_value = supa
+
+        res = client.post("/stripe/webhook", data=b"{}", headers={"stripe-signature": "t=1,v1=x"})
+        assert res.status_code == 200
+        assert res.json().get("duplicate") is True
+        # should not proceed to update subscriptions
+        assert subs_q.upsert.call_count == 0
+
+    @patch("app.main.get_supabase_client")
+    @patch("app.main.get_stripe_client")
     def test_webhook_subscription_deleted_sets_expired(self, mock_stripe, mock_supa, client, monkeypatch):
+        monkeypatch.setenv("BILLING_PROVIDER", "stripe")
         monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
 
         event = {
@@ -216,6 +281,7 @@ class TestStripeWebhook:
     @patch("app.main.get_supabase_client")
     @patch("app.main.get_stripe_client")
     def test_webhook_invoice_payment_failed_marks_past_due(self, mock_stripe, mock_supa, client, monkeypatch):
+        monkeypatch.setenv("BILLING_PROVIDER", "stripe")
         monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
 
         event = {

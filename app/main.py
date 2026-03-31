@@ -57,6 +57,12 @@ from .schemas import (
 from .deps import get_current_context, RequestContext
 from .subscriptions import enforce_limits_on_create_product, get_store_plan, get_plan_info
 from .stripe_client import get_stripe_client, get_publishable_key
+from .paystack_client import (
+    get_paystack_public_key,
+    get_paystack_plan_code,
+    initialize_transaction,
+    verify_paystack_signature,
+)
 from .push import get_vapid_public_key, send_web_push
 import csv
 import io
@@ -593,22 +599,23 @@ def get_reports(
 class CheckoutRequest(BaseModel):
     # Single-plan billing: backend only accepts "pro"
     plan: Literal["pro"]
+    email: Optional[str] = None
 
 
 @app.get("/billing/config")
 def get_billing_config():
-    """Get Stripe publishable key and price IDs for frontend."""
+    """Get billing configuration for frontend."""
     return {
-        "publishable_key": get_publishable_key(),
-        "prices": {
-            "pro": {
-                "id": os.getenv("STRIPE_PRO_PRICE_ID", ""),
-                "amount": 25000,
-                "currency": "ZAR",
-                "name": "Pro Plan",
-                "description": "Full access with a 30-day free trial"
-            }
-        }
+        "provider": os.getenv("BILLING_PROVIDER", "paystack"),
+        "stripe": {
+            "publishable_key": get_publishable_key(),
+            "prices": {"pro": {"id": os.getenv("STRIPE_PRO_PRICE_ID", "")}},
+        },
+        "paystack": {
+            "public_key": get_paystack_public_key(),
+            "plan_code": get_paystack_plan_code(),
+            "currency": "ZAR",
+        },
     }
 
 
@@ -616,8 +623,9 @@ def get_billing_config():
 def create_checkout_session(body: CheckoutRequest, ctx: RequestContext = Depends(get_current_context)):
     if ctx.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
-    stripe = get_stripe_client()
     supa = get_supabase_client()
+
+    provider = (os.getenv("BILLING_PROVIDER") or "paystack").lower().strip()
     
     try:
         sub_res = supa.table("subscriptions").select("*").eq("store_id", ctx.store_id).single().execute()
@@ -625,38 +633,57 @@ def create_checkout_session(body: CheckoutRequest, ctx: RequestContext = Depends
     except Exception:
         sub_data = {}
     
-    customer_id = sub_data.get("stripe_customer_id")
-    if not customer_id:
-        customer = stripe.Customer.create(
-            metadata={"store_id": ctx.store_id}
-        )
-        customer_id = customer["id"]
-        supa.table("subscriptions").upsert({
-            "store_id": ctx.store_id,
-            "stripe_customer_id": customer_id,
-        }).execute()
-    
     requested_plan = body.plan  # enforced by schema
-    price_id = os.getenv("STRIPE_PRO_PRICE_ID", "")
-    if not price_id:
-        raise HTTPException(status_code=400, detail="Invalid plan or missing price ID. Set STRIPE_PRO_PRICE_ID in .env")
-    
+
     # Use FRONTEND_URL for redirects (set in .env)
     frontend_url = (os.getenv("FRONTEND_URL", "http://localhost:5173") or "").rstrip("/")
+
+    if provider == "paystack":
+        # Paystack needs an email (frontend provides it; backend doesn't store it in profiles)
+        email = (getattr(body, "email", None) or "").strip()
+        if not email:
+            raise HTTPException(status_code=400, detail="Missing email for Paystack checkout")
+
+        callback_url = f"{frontend_url}/billing?success=1"
+        amount_kobo = 25000  # R250.00 monthly (trial-like behavior can be handled in-app if needed)
+
+        url = initialize_transaction(
+            email=email,
+            amount_kobo=amount_kobo,
+            callback_url=callback_url,
+            metadata={"store_id": str(ctx.store_id), "plan": requested_plan},
+        )
+        # mark provider on subscription row (best effort)
+        try:
+            supa.table("subscriptions").upsert({
+                "store_id": ctx.store_id,
+                "billing_provider": "paystack",
+            }).execute()
+        except Exception:
+            pass
+        return {"url": url}
+
+    # Stripe fallback (kept for now)
+    stripe = get_stripe_client()
+    customer_id = sub_data.get("stripe_customer_id")
+    if not customer_id:
+        customer = stripe.Customer.create(metadata={"store_id": ctx.store_id})
+        customer_id = customer["id"]
+        supa.table("subscriptions").upsert({"store_id": ctx.store_id, "stripe_customer_id": customer_id}).execute()
+
+    price_id = os.getenv("STRIPE_PRO_PRICE_ID", "")
+    if not price_id:
+        raise HTTPException(status_code=400, detail="Missing STRIPE_PRO_PRICE_ID")
     success_url = f"{frontend_url}/billing?success=1"
     cancel_url = f"{frontend_url}/billing?canceled=1"
-    
     session = stripe.checkout.Session.create(
         mode="subscription",
         customer=customer_id,
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=success_url,
         cancel_url=cancel_url,
-        payment_method_collection="always",  # Require credit card even for trial
-        subscription_data={
-            "trial_period_days": 30,  # 30-day free trial (1 month)
-            "metadata": {"store_id": ctx.store_id, "plan": requested_plan}
-        },
+        payment_method_collection="always",
+        subscription_data={"trial_period_days": 30, "metadata": {"store_id": ctx.store_id, "plan": requested_plan}},
         metadata={"store_id": ctx.store_id, "plan": requested_plan},
     )
     return {"url": session["url"]}
@@ -667,6 +694,9 @@ def create_customer_portal(ctx: RequestContext = Depends(get_current_context)):
     """Create a Stripe customer portal session for managing subscription."""
     if ctx.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
+    provider = (os.getenv("BILLING_PROVIDER") or "paystack").lower().strip()
+    if provider == "paystack":
+        raise HTTPException(status_code=400, detail="Paystack does not support a Stripe-like billing portal. Use your Paystack dashboard to manage subscriptions.")
     stripe = get_stripe_client()
     supa = get_supabase_client()
     
@@ -694,6 +724,9 @@ def create_customer_portal(ctx: RequestContext = Depends(get_current_context)):
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook events for subscription updates."""
+    provider = (os.getenv("BILLING_PROVIDER") or "paystack").lower().strip()
+    if provider == "paystack":
+        raise HTTPException(status_code=404, detail="Stripe webhook disabled (Paystack active)")
     payload = await request.body()
     sig = request.headers.get("stripe-signature")
     stripe = get_stripe_client()
@@ -715,10 +748,26 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
     
     event_type = event["type"]
+    event_id = event.get("id")
     print(f"[Stripe Webhook] Received event: {event_type}")
 
     # Only hit DB after signature verification succeeded
     supa = get_supabase_client()
+
+    # Deduplicate delivery (Stripe retries can deliver the same event multiple times)
+    if event_id:
+        try:
+            supa.table("stripe_webhook_events").insert({
+                "id": event_id,
+                "type": event_type,
+                "received_at": _now_utc_iso(),
+            }).execute()
+        except Exception as e:
+            msg = str(e).lower()
+            # Treat unique violation as "already processed"
+            if "duplicate" in msg or "unique" in msg or "23505" in msg:
+                return {"received": True, "duplicate": True}
+            raise
     
     if event_type in ("customer.subscription.created", "customer.subscription.updated"):
         sub = event["data"]["object"]
@@ -815,6 +864,86 @@ async def stripe_webhook(request: Request):
                     "stripe_subscription_id": subscription_id,
                 }).execute()
     
+    return {"received": True}
+
+
+@app.post("/paystack/webhook")
+async def paystack_webhook(request: Request):
+    raw = await request.body()
+    signature = request.headers.get("x-paystack-signature")
+    if not verify_paystack_signature(raw, signature):
+        raise HTTPException(status_code=400, detail="Invalid Paystack signature")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    event_type = payload.get("event")
+    data = payload.get("data") or {}
+    meta = (data.get("metadata") or {})
+    store_id = meta.get("store_id")
+    plan = meta.get("plan") or "pro"
+
+    supa = get_supabase_client()
+
+    # Deduplicate on Paystack event id if present
+    event_id = data.get("id") or payload.get("id")
+    if event_id:
+        try:
+            supa.table("stripe_webhook_events").insert({
+                "id": f"paystack:{event_id}",
+                "type": f"paystack:{event_type}",
+                "received_at": _now_utc_iso(),
+            }).execute()
+        except Exception as e:
+            msg = str(e).lower()
+            if "duplicate" in msg or "unique" in msg or "23505" in msg:
+                return {"received": True, "duplicate": True}
+            raise
+
+    if not store_id:
+        return {"received": True}
+
+    update = {
+        "store_id": store_id,
+        "billing_provider": "paystack",
+        "plan": "pro" if plan == "business" else plan,
+    }
+
+    # Paystack: charge.success indicates payment
+    if event_type == "charge.success":
+        update["status"] = "active"
+        cust = data.get("customer") or {}
+        update["paystack_customer_code"] = cust.get("customer_code")
+        sub = data.get("subscription") or {}
+        if isinstance(sub, dict):
+            update["paystack_subscription_code"] = sub.get("subscription_code")
+            update["paystack_email_token"] = sub.get("email_token")
+        supa.table("subscriptions").upsert(update).execute()
+
+    elif event_type in ("subscription.create", "subscription.enable"):
+        update["status"] = "active"
+        update["paystack_subscription_code"] = data.get("subscription_code")
+        update["paystack_email_token"] = data.get("email_token")
+        supa.table("subscriptions").upsert(update).execute()
+
+    elif event_type in ("subscription.disable", "subscription.not_renew"):
+        supa.table("subscriptions").upsert({
+            "store_id": store_id,
+            "billing_provider": "paystack",
+            "status": "canceled",
+            "plan": "expired",
+        }).execute()
+
+    elif event_type in ("invoice.payment_failed",):
+        supa.table("subscriptions").upsert({
+            "store_id": store_id,
+            "billing_provider": "paystack",
+            "status": "past_due",
+            "plan": update["plan"],
+        }).execute()
+
     return {"received": True}
 
 

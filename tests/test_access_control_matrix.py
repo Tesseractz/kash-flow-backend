@@ -61,6 +61,9 @@ def test_cashier_cannot_create_customer_portal(cashier_client):
 @patch("app.main.get_supabase_client")
 @patch("app.main.get_stripe_client")
 def test_admin_can_create_portal_when_customer_exists(mock_stripe, mock_supa, admin_client, sample_subscription_pro):
+    import os
+    original_provider = os.environ.get("BILLING_PROVIDER")
+    os.environ["BILLING_PROVIDER"] = "stripe"
     stripe = MagicMock()
     stripe.billing_portal.Session.create.return_value = {"url": "https://portal.test/session"}
     mock_stripe.return_value = stripe
@@ -74,7 +77,13 @@ def test_admin_can_create_portal_when_customer_exists(mock_stripe, mock_supa, ad
     supa.table.return_value = q
     mock_supa.return_value = supa
 
-    res = admin_client.post("/billing/portal")
-    assert res.status_code == 200
-    assert "url" in res.json()
+    try:
+        res = admin_client.post("/billing/portal")
+        assert res.status_code == 200
+        assert "url" in res.json()
+    finally:
+        if original_provider is not None:
+            os.environ["BILLING_PROVIDER"] = original_provider
+        else:
+            os.environ.pop("BILLING_PROVIDER", None)
 

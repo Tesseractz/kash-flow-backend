@@ -641,6 +641,8 @@ class TestStripeWebhookAPI:
         from app.main import app
         
         original = os.environ.get("STRIPE_WEBHOOK_SECRET")
+        original_provider = os.environ.get("BILLING_PROVIDER")
+        os.environ["BILLING_PROVIDER"] = "stripe"
         os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
         
         mock_supabase.return_value = MagicMock()
@@ -660,6 +662,12 @@ class TestStripeWebhookAPI:
         finally:
             if original:
                 os.environ["STRIPE_WEBHOOK_SECRET"] = original
+            else:
+                os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
+            if original_provider is not None:
+                os.environ["BILLING_PROVIDER"] = original_provider
+            else:
+                os.environ.pop("BILLING_PROVIDER", None)
     
     @patch('app.main.get_supabase_client')
     @patch('app.main.get_stripe_client')
@@ -668,6 +676,8 @@ class TestStripeWebhookAPI:
         from app.main import app
         
         original = os.environ.get("STRIPE_WEBHOOK_SECRET")
+        original_provider = os.environ.get("BILLING_PROVIDER")
+        os.environ["BILLING_PROVIDER"] = "stripe"
         os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test"
         
         mock_supabase.return_value = MagicMock()
@@ -688,6 +698,10 @@ class TestStripeWebhookAPI:
                 os.environ["STRIPE_WEBHOOK_SECRET"] = original
             else:
                 os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
+            if original_provider is not None:
+                os.environ["BILLING_PROVIDER"] = original_provider
+            else:
+                os.environ.pop("BILLING_PROVIDER", None)
 
 
 class TestBillingCheckoutAPI:

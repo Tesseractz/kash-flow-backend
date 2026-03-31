@@ -79,65 +79,6 @@ class TestGetStripeCredentialsFromEnv:
                 os.environ["STRIPE_PUBLISHABLE_KEY"] = original_pub
 
 
-class TestGetStripeCredentialsFromReplit:
-    """Tests for get_stripe_credentials_from_replit function."""
-    
-    def test_returns_none_when_not_in_replit(self):
-        """Test that None is returned when not in Replit environment."""
-        from app.stripe_client import get_stripe_credentials_from_replit
-        
-        # Clear Replit-specific environment variables
-        originals = {}
-        for key in ["REPLIT_CONNECTORS_HOSTNAME", "REPL_IDENTITY", "WEB_REPL_RENEWAL"]:
-            originals[key] = os.environ.get(key)
-            os.environ.pop(key, None)
-        
-        try:
-            result = get_stripe_credentials_from_replit()
-            assert result is None
-        finally:
-            for key, value in originals.items():
-                if value:
-                    os.environ[key] = value
-    
-    @patch('httpx.get')
-    def test_fetches_from_replit_api(self, mock_get):
-        """Test that credentials are fetched from Replit connector API."""
-        from app.stripe_client import get_stripe_credentials_from_replit
-        
-        originals = {
-            "REPLIT_CONNECTORS_HOSTNAME": os.environ.get("REPLIT_CONNECTORS_HOSTNAME"),
-            "REPL_IDENTITY": os.environ.get("REPL_IDENTITY"),
-        }
-        
-        os.environ["REPLIT_CONNECTORS_HOSTNAME"] = "connectors.replit.com"
-        os.environ["REPL_IDENTITY"] = "test-identity"
-        
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "items": [{
-                "settings": {
-                    "secret": "sk_test_replit",
-                    "publishable": "pk_test_replit"
-                }
-            }]
-        }
-        mock_get.return_value = mock_response
-        
-        try:
-            result = get_stripe_credentials_from_replit()
-            
-            assert result is not None
-            assert result["secret_key"] == "sk_test_replit"
-            assert result["publishable_key"] == "pk_test_replit"
-        finally:
-            for key, value in originals.items():
-                if value:
-                    os.environ[key] = value
-                else:
-                    os.environ.pop(key, None)
-
-
 class TestGetStripeCredentials:
     """Tests for get_stripe_credentials function."""
     
@@ -165,21 +106,12 @@ class TestGetStripeCredentials:
         original_secret = os.environ.get("STRIPE_SECRET_KEY")
         os.environ.pop("STRIPE_SECRET_KEY", None)
         
-        # Clear Replit vars too
-        replit_originals = {}
-        for key in ["REPLIT_CONNECTORS_HOSTNAME", "REPL_IDENTITY", "WEB_REPL_RENEWAL"]:
-            replit_originals[key] = os.environ.get(key)
-            os.environ.pop(key, None)
-        
         try:
             with pytest.raises(Exception, match="Stripe credentials not found"):
                 get_stripe_credentials()
         finally:
             if original_secret:
                 os.environ["STRIPE_SECRET_KEY"] = original_secret
-            for key, value in replit_originals.items():
-                if value:
-                    os.environ[key] = value
 
 
 class TestInitStripe:

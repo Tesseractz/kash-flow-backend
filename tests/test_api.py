@@ -405,9 +405,12 @@ class TestBillingAPI:
         
         assert response.status_code == 200
         data = response.json()
-        assert "prices" in data
-        assert "pro" in data["prices"]
-        assert "business" not in data["prices"]
+        assert "provider" in data
+        assert "paystack" in data
+        assert "stripe" in data
+        assert "prices" in data["stripe"]
+        assert "pro" in data["stripe"]["prices"]
+        assert "business" not in data["stripe"]["prices"]
     
     @patch('app.main.get_plan_info')
     def test_get_current_plan(self, mock_plan_info, test_client):
