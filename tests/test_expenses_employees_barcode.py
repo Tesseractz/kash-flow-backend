@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from uuid import uuid4
 
 from app.main import app
-from app.deps import get_current_context, RequestContext
+from app.api.deps import get_current_context, RequestContext
 
 
 # Test fixtures
@@ -53,9 +53,12 @@ class TestExpensesAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    def test_list_expenses_success(self, mock_supabase, client, admin_context):
+    @patch("app.services.subscriptions.get_store_plan")
+    @patch("app.db.supabase.get_supabase_client")
+    def test_list_expenses_success(self, mock_supabase, mock_plan, client, admin_context):
         """Admin can list expenses."""
+        from app.services.subscriptions import PlanLimits
+        mock_plan.return_value = PlanLimits("pro", status="active")
         mock_client = MagicMock()
         mock_supabase.return_value = mock_client
         
@@ -79,10 +82,13 @@ class TestExpensesAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
-    def test_create_expense_success(self, mock_audit, mock_supabase, client, admin_context):
+    @patch("app.services.subscriptions.get_store_plan")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
+    def test_create_expense_success(self, mock_audit, mock_supabase, mock_plan, client, admin_context):
         """Admin can create an expense."""
+        from app.services.subscriptions import PlanLimits
+        mock_plan.return_value = PlanLimits("pro", status="active")
         mock_client = MagicMock()
         mock_supabase.return_value = mock_client
         
@@ -132,8 +138,8 @@ class TestExpensesAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
     def test_update_expense_success(self, mock_audit, mock_supabase, client, admin_context):
         """Admin can update an expense."""
         mock_client = MagicMock()
@@ -159,8 +165,8 @@ class TestExpensesAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
     def test_delete_expense_success(self, mock_audit, mock_supabase, client, admin_context):
         """Admin can delete an expense."""
         mock_client = MagicMock()
@@ -191,7 +197,7 @@ class TestBarcodeAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_generate_barcode_product_not_found(self, mock_supabase, client, admin_context):
         """Returns 404 if product not found."""
         mock_client = MagicMock()
@@ -206,7 +212,7 @@ class TestBarcodeAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_lookup_barcode_not_found(self, mock_supabase, client, cashier_context):
         """Returns 404 if barcode not found."""
         mock_client = MagicMock()
@@ -221,7 +227,7 @@ class TestBarcodeAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_lookup_barcode_success(self, mock_supabase, client, cashier_context):
         """Successfully looks up a product by barcode."""
         mock_client = MagicMock()
@@ -250,9 +256,12 @@ class TestBarcodeAPI:
 # ============================================
 class TestEnhancedReportsAPI:
     
-    @patch("app.main.get_supabase_client")
-    def test_profit_loss_report(self, mock_supabase, client, admin_context):
+    @patch("app.services.subscriptions.get_store_plan")
+    @patch("app.db.supabase.get_supabase_client")
+    def test_profit_loss_report(self, mock_supabase, mock_plan, client, admin_context):
         """Generate profit & loss report."""
+        from app.services.subscriptions import PlanLimits
+        mock_plan.return_value = PlanLimits("pro", status="active")
         mock_client = MagicMock()
         mock_supabase.return_value = mock_client
         
@@ -284,7 +293,7 @@ class TestEnhancedReportsAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_profit_loss_cashier_forbidden(self, mock_supabase, client, cashier_context):
         """Cashiers cannot access P&L report."""
         app.dependency_overrides[get_current_context] = lambda: cashier_context
@@ -297,9 +306,12 @@ class TestEnhancedReportsAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    def test_tax_report(self, mock_supabase, client, admin_context):
+    @patch("app.services.subscriptions.get_store_plan")
+    @patch("app.db.supabase.get_supabase_client")
+    def test_tax_report(self, mock_supabase, mock_plan, client, admin_context):
         """Generate tax report."""
+        from app.services.subscriptions import PlanLimits
+        mock_plan.return_value = PlanLimits("pro", status="active")
         mock_client = MagicMock()
         mock_supabase.return_value = mock_client
         
@@ -325,9 +337,12 @@ class TestEnhancedReportsAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    def test_inventory_valuation_report(self, mock_supabase, client, admin_context):
+    @patch("app.services.subscriptions.get_store_plan")
+    @patch("app.db.supabase.get_supabase_client")
+    def test_inventory_valuation_report(self, mock_supabase, mock_plan, client, admin_context):
         """Generate inventory valuation report."""
+        from app.services.subscriptions import PlanLimits
+        mock_plan.return_value = PlanLimits("pro", status="active")
         mock_client = MagicMock()
         mock_supabase.return_value = mock_client
         
@@ -365,7 +380,7 @@ class TestBarcodeAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_generate_barcode_product_not_found(self, mock_supabase, client, admin_context):
         """Returns 404 if product not found."""
         mock_client = MagicMock()
@@ -378,7 +393,7 @@ class TestBarcodeAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_lookup_barcode_not_found(self, mock_supabase, client, cashier_context):
         """Returns 404 if barcode not found."""
         mock_client = MagicMock()
@@ -391,7 +406,7 @@ class TestBarcodeAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_lookup_barcode_success(self, mock_supabase, client, cashier_context):
         """Successfully looks up a product by barcode."""
         mock_client = MagicMock()
@@ -414,7 +429,7 @@ class TestBarcodeAPI:
 # ============================================
 class TestExpenseCategoriesAPI:
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_list_expense_categories_creates_defaults(self, mock_supabase, client, cashier_context):
         """Creates default categories if none exist."""
         mock_client = MagicMock()

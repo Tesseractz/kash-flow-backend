@@ -25,14 +25,14 @@ class TestGetSupabaseUrl:
     
     def test_returns_supabase_url(self):
         """Test that function returns the configured URL."""
-        from app.auth import _get_supabase_url
+        from app.core.auth import _get_supabase_url
         
         url = _get_supabase_url()
         assert url == "https://test.supabase.co"
     
     def test_raises_on_missing_url(self):
         """Test that function raises when URL is not set."""
-        from app.auth import _get_supabase_url
+        from app.core.auth import _get_supabase_url
         
         original = os.environ.get("SUPABASE_URL")
         os.environ.pop("SUPABASE_URL", None)
@@ -50,14 +50,14 @@ class TestGetJwtSecret:
     
     def test_returns_jwt_secret(self):
         """Test that function returns the configured secret."""
-        from app.auth import _get_jwt_secret
+        from app.core.auth import _get_jwt_secret
         
         secret = _get_jwt_secret()
         assert secret == "test-jwt-secret-key-for-testing"
     
     def test_returns_none_when_not_set(self):
         """Test that function returns None when secret is not set."""
-        from app.auth import _get_jwt_secret
+        from app.core.auth import _get_jwt_secret
         
         original = os.environ.get("SUPABASE_JWT_SECRET")
         os.environ.pop("SUPABASE_JWT_SECRET", None)
@@ -75,7 +75,7 @@ class TestJwksUrl:
     
     def test_returns_correct_url(self):
         """Test that JWKS URL is constructed correctly."""
-        from app.auth import _jwks_url
+        from app.core.auth import _jwks_url
         
         url = _jwks_url()
         assert url == "https://test.supabase.co/auth/v1/jwks"
@@ -86,7 +86,7 @@ class TestGetJwks:
     
     def test_fetches_jwks_on_first_call(self):
         """Test that JWKS is fetched from the server."""
-        import app.auth as auth_module
+        import app.core.auth as auth_module
         
         # Clear cache
         auth_module.JWKS_CACHE = None
@@ -104,7 +104,7 @@ class TestGetJwks:
     
     def test_returns_cached_jwks(self):
         """Test that cached JWKS is returned on subsequent calls."""
-        import app.auth as auth_module
+        import app.core.auth as auth_module
         
         auth_module.JWKS_CACHE = {"keys": [{"kid": "cached", "kty": "RSA"}]}
         
@@ -117,7 +117,7 @@ class TestGetJwks:
     
     def test_handles_fetch_error(self):
         """Test that empty keys is returned on fetch error."""
-        import app.auth as auth_module
+        import app.core.auth as auth_module
         
         auth_module.JWKS_CACHE = None
         
@@ -154,7 +154,7 @@ class TestVerifySupabaseJwt:
     
     def test_validates_token_with_fallback(self):
         """Test that token validation works via fallback method."""
-        from app.auth import verify_supabase_jwt
+        from app.core.auth import verify_supabase_jwt
         
         payload = {
             "sub": "user-123",
@@ -170,7 +170,7 @@ class TestVerifySupabaseJwt:
     
     def test_rejects_invalid_token_format(self):
         """Test that invalid token format is rejected."""
-        from app.auth import verify_supabase_jwt
+        from app.core.auth import verify_supabase_jwt
         
         with pytest.raises(HTTPException) as exc:
             verify_supabase_jwt("not.valid")
@@ -179,7 +179,7 @@ class TestVerifySupabaseJwt:
     
     def test_rejects_token_without_sub(self):
         """Test that token without sub claim is rejected."""
-        from app.auth import verify_supabase_jwt
+        from app.core.auth import verify_supabase_jwt
         
         payload = {
             "iss": "https://test.supabase.co/auth/v1",
@@ -196,7 +196,7 @@ class TestVerifySupabaseJwt:
     
     def test_rejects_token_with_wrong_issuer(self):
         """Test that token with wrong issuer is rejected."""
-        from app.auth import verify_supabase_jwt
+        from app.core.auth import verify_supabase_jwt
         
         payload = {
             "sub": "user-123",
@@ -214,7 +214,7 @@ class TestVerifySupabaseJwt:
     
     def test_rejects_expired_token(self):
         """Test that expired token is rejected."""
-        from app.auth import verify_supabase_jwt
+        from app.core.auth import verify_supabase_jwt
         
         payload = {
             "sub": "user-123",
@@ -237,7 +237,7 @@ class TestVerifyWithHS256:
     def test_verifies_valid_hs256_token(self):
         """Test verification of valid HS256 token with correct secret."""
         from jose import jwt
-        from app.auth import verify_supabase_jwt
+        from app.core.auth import verify_supabase_jwt
         
         secret = os.environ["SUPABASE_JWT_SECRET"]
         payload = {
@@ -258,8 +258,8 @@ class TestVerifyWithRS256:
     
     def test_handles_rs256_without_matching_key(self):
         """Test that RS256 token without matching key falls back."""
-        from app.auth import verify_supabase_jwt
-        import app.auth as auth_module
+        from app.core.auth import verify_supabase_jwt
+        import app.core.auth as auth_module
         
         # Mock empty JWKS
         auth_module.JWKS_CACHE = {"keys": []}

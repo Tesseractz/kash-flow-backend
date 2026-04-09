@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone, date
 from dateutil import parser as date_parser
 from typing import List, Optional
 from pydantic import BaseModel
-from .supabase_client import get_supabase_client
+from app.db.supabase import get_supabase_client
 
 
 class SalesTrend(BaseModel):

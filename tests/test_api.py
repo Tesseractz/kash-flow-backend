@@ -24,7 +24,7 @@ os.environ.pop("DEV_PLAN_OVERRIDE", None)
 
 def create_mock_context(user_id="test-user-id", store_id="test-store-id", role="admin"):
     """Create a mock RequestContext."""
-    from app.deps import RequestContext
+    from app.api.deps import RequestContext
     return RequestContext(user_id=user_id, store_id=store_id, role=role)
 
 
@@ -32,7 +32,7 @@ def create_mock_context(user_id="test-user-id", store_id="test-store-id", role="
 def test_client():
     """Create test client with dependency overrides."""
     from app.main import app
-    from app.deps import get_current_context
+    from app.api.deps import get_current_context
     
     # Override the dependency
     app.dependency_overrides[get_current_context] = lambda: create_mock_context()
@@ -48,7 +48,7 @@ def test_client():
 def test_client_cashier():
     """Create test client with cashier role."""
     from app.main import app
-    from app.deps import get_current_context
+    from app.api.deps import get_current_context
     
     app.dependency_overrides[get_current_context] = lambda: create_mock_context(role="cashier")
     
@@ -77,7 +77,7 @@ class TestHealthEndpoint:
 class TestProductsAPI:
     """Tests for products API endpoints."""
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_list_products_returns_empty_list(self, mock_supabase, test_client):
         """Test listing products when there are none."""
         mock_query = MagicMock()
@@ -93,7 +93,7 @@ class TestProductsAPI:
         assert response.status_code == 200
         assert response.json() == []
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_list_products_returns_products(self, mock_supabase, test_client):
         """Test listing products returns product data."""
         products = [
@@ -116,9 +116,9 @@ class TestProductsAPI:
         assert len(data) == 2
         assert data[0]["name"] == "Product 1"
     
-    @patch('app.main.log_audit_event')
-    @patch('app.main.enforce_limits_on_create_product')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.audit_log.log_audit_event')
+    @patch('app.services.subscriptions.enforce_limits_on_create_product')
+    @patch('app.db.supabase.get_supabase_client')
     def test_create_product_success(self, mock_supabase, mock_limits, mock_audit, test_client):
         """Test creating a product successfully."""
         mock_limits.return_value = None
@@ -159,12 +159,12 @@ class TestProductsAPI:
         assert response.status_code == 403
         assert "Admins only" in response.json()["detail"]
     
-    @patch('app.main.log_audit_event')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.audit_log.log_audit_event')
+    @patch('app.db.supabase.get_supabase_client')
     def test_update_product_success(self, mock_supabase, mock_audit):
         """Test updating a product successfully."""
         from app.main import app
-        from app.deps import get_current_context
+        from app.api.deps import get_current_context
         
         # Set up dependency override
         app.dependency_overrides[get_current_context] = lambda: create_mock_context(role="admin")
@@ -203,8 +203,8 @@ class TestProductsAPI:
         data = response.json()
         assert data["name"] == "Updated Product"
     
-    @patch('app.main.log_audit_event')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.audit_log.log_audit_event')
+    @patch('app.db.supabase.get_supabase_client')
     def test_delete_product_success(self, mock_supabase, mock_audit, test_client):
         """Test deleting a product successfully."""
         mock_audit.return_value = None
@@ -223,7 +223,7 @@ class TestProductsAPI:
 class TestSalesAPI:
     """Tests for sales API endpoints."""
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_list_sales_returns_sales(self, mock_supabase, test_client):
         """Test listing sales returns sale data."""
         now = datetime.now(timezone.utc).isoformat()
@@ -245,8 +245,8 @@ class TestSalesAPI:
         data = response.json()
         assert len(data) == 2
     
-    @patch('app.main.log_audit_event')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.audit_log.log_audit_event')
+    @patch('app.db.supabase.get_supabase_client')
     def test_create_sale_success(self, mock_supabase, mock_audit, test_client):
         """Test creating a sale successfully."""
         mock_audit.return_value = None
@@ -278,8 +278,8 @@ class TestSalesAPI:
 class TestReturnsAPI:
     """Tests for returns API endpoints."""
     
-    @patch('app.main.log_audit_event')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.audit_log.log_audit_event')
+    @patch('app.db.supabase.get_supabase_client')
     def test_process_return_success(self, mock_supabase, mock_audit, test_client):
         """Test processing a return successfully."""
         mock_audit.return_value = None
@@ -344,9 +344,12 @@ class TestReturnsAPI:
 class TestReportsAPI:
     """Tests for reports API endpoints."""
     
-    @patch('app.main.get_supabase_client')
-    def test_get_reports_success(self, mock_supabase, test_client):
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.db.supabase.get_supabase_client')
+    def test_get_reports_success(self, mock_supabase, mock_plan, test_client):
         """Test getting daily report."""
+        from app.services.subscriptions import PlanLimits
+        mock_plan.return_value = PlanLimits("pro", status="active")
         now = datetime.now(timezone.utc)
         sales = [
             {"id": 1, "product_id": 1, "quantity_sold": 2, "total_price": 200.0, "timestamp": now.isoformat()},
@@ -406,13 +409,11 @@ class TestBillingAPI:
         assert response.status_code == 200
         data = response.json()
         assert "provider" in data
+        assert data["provider"] == "paystack"
         assert "paystack" in data
-        assert "stripe" in data
-        assert "prices" in data["stripe"]
-        assert "pro" in data["stripe"]["prices"]
-        assert "business" not in data["stripe"]["prices"]
+        assert "stripe" not in data
     
-    @patch('app.main.get_plan_info')
+    @patch('app.services.subscriptions.get_plan_info')
     def test_get_current_plan(self, mock_plan_info, test_client):
         """Test getting current plan."""
         mock_plan_info.return_value = {
@@ -440,9 +441,12 @@ class TestBillingAPI:
 class TestUserManagementAPI:
     """Tests for user management API endpoints."""
     
-    @patch('app.main.get_supabase_client')
-    def test_list_users_success(self, mock_supabase, test_client):
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.db.supabase.get_supabase_client')
+    def test_list_users_success(self, mock_supabase, mock_plan, test_client):
         """Test listing users."""
+        from app.services.subscriptions import PlanLimits
+        mock_plan.return_value = PlanLimits("pro", status="active")
         profiles = [
             {"id": "user-1", "name": "Admin", "role": "admin", "store_id": "test-store-id"},
             {"id": "user-2", "name": "Cashier", "role": "cashier", "store_id": "test-store-id"},
@@ -477,11 +481,11 @@ class TestUserManagementAPI:
 class TestLowStockAlertsAPI:
     """Tests for low stock alerts API endpoints."""
     
-    @patch('app.main.get_store_plan')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.db.supabase.get_supabase_client')
     def test_get_low_stock_alerts_success(self, mock_supabase, mock_plan, test_client):
         """Test getting low stock alerts."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("pro", status="active")
         
@@ -504,10 +508,10 @@ class TestLowStockAlertsAPI:
         assert len(data) == 1
         assert data[0]["quantity"] == 5
     
-    @patch('app.main.get_store_plan')
+    @patch('app.services.subscriptions.get_store_plan')
     def test_low_stock_alerts_blocked_for_free_plan(self, mock_plan, test_client):
         """Test that free plan cannot access low stock alerts."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("free", status="active")
         
@@ -520,12 +524,12 @@ class TestLowStockAlertsAPI:
 class TestAnalyticsAPI:
     """Tests for analytics API endpoints."""
     
-    @patch('app.main.get_store_plan')
-    @patch('app.main.get_analytics')
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.services.analytics.get_analytics')
     def test_get_analytics_success(self, mock_analytics, mock_plan, test_client):
         """Test getting analytics."""
-        from app.subscriptions import PlanLimits
-        from app.analytics import AnalyticsSummary
+        from app.services.subscriptions import PlanLimits
+        from app.services.analytics import AnalyticsSummary
         
         mock_plan.return_value = PlanLimits("pro", status="active")
         mock_analytics.return_value = AnalyticsSummary(
@@ -544,10 +548,10 @@ class TestAnalyticsAPI:
         assert data["total_revenue"] == 1000.0
         assert data["total_profit"] == 400.0
     
-    @patch('app.main.get_store_plan')
+    @patch('app.services.subscriptions.get_store_plan')
     def test_analytics_blocked_for_free_plan(self, mock_plan, test_client):
         """Test that free plan cannot access advanced analytics."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("free", status="active")
         
@@ -582,11 +586,11 @@ class TestPasswordEncryption:
 class TestAuditLogsAPI:
     """Tests for audit logs API endpoints."""
     
-    @patch('app.main.get_store_plan')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.db.supabase.get_supabase_client')
     def test_get_audit_logs_success(self, mock_supabase, mock_plan, test_client):
         """Test getting audit logs for business plan."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("business", status="active")
         
@@ -609,11 +613,11 @@ class TestAuditLogsAPI:
         data = response.json()
         assert len(data) == 1
     
-    @patch('app.main.get_store_plan')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.db.supabase.get_supabase_client')
     def test_audit_logs_allowed_for_pro_plan(self, mock_supabase, mock_plan, test_client):
         """Test that pro plan can access audit logs (single-plan billing)."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("pro", status="active")
         
@@ -639,11 +643,11 @@ class TestAuditLogsAPI:
 class TestCSVExportAPI:
     """Tests for CSV export API endpoints."""
     
-    @patch('app.main.get_store_plan')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.db.supabase.get_supabase_client')
     def test_csv_export_success(self, mock_supabase, mock_plan, test_client):
         """Test CSV export for pro plan."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("pro", status="active")
         
@@ -684,10 +688,10 @@ class TestCSVExportAPI:
         assert response.headers["content-type"] == "text/csv; charset=utf-8"
         assert "attachment" in response.headers["content-disposition"]
     
-    @patch('app.main.get_store_plan')
+    @patch('app.services.subscriptions.get_store_plan')
     def test_csv_export_blocked_for_free_plan(self, mock_plan, test_client):
         """Test that free plan cannot export CSV."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("free", status="active")
         

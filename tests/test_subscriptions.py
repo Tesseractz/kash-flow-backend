@@ -21,12 +21,12 @@ class TestPlanLimits:
     
     def test_free_plan_limits(self):
         """Test free plan has correct limits."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         limits = PlanLimits("free", status="active")
         
         assert limits.plan == "free"
-        assert limits.is_active == True
+        assert limits.is_active == False
         assert limits.is_on_trial == False
         assert limits.max_products == 10
         assert limits.max_users == 1
@@ -37,7 +37,7 @@ class TestPlanLimits:
     
     def test_pro_plan_limits(self):
         """Test pro plan has correct limits."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         limits = PlanLimits("pro", status="active")
         
@@ -52,12 +52,12 @@ class TestPlanLimits:
         assert limits.allow_advanced_reports == True
     
     def test_business_plan_limits(self):
-        """Test legacy business plan has correct limits."""
-        from app.subscriptions import PlanLimits
-        
+        """Legacy business plan is normalized to pro for limits."""
+        from app.services.subscriptions import PlanLimits
+
         limits = PlanLimits("business", status="active")
-        
-        assert limits.plan == "business"
+
+        assert limits.plan == "pro"
         assert limits.is_active == True
         assert limits.is_on_trial == False
         assert limits.max_products is None  # Unlimited
@@ -69,7 +69,7 @@ class TestPlanLimits:
     
     def test_expired_plan_limits(self):
         """Test expired plan has restricted limits."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         limits = PlanLimits("expired", status="expired")
         
@@ -84,7 +84,7 @@ class TestPlanLimits:
     
     def test_active_trial_has_full_access(self):
         """Test that active trial gives full access to all features."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         # Trial ends 15 days from now
         trial_end = datetime.now(timezone.utc) + timedelta(days=15)
@@ -101,7 +101,7 @@ class TestPlanLimits:
     
     def test_expired_trial_has_restricted_access(self):
         """Test that expired trial has restricted access."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         # Trial ended 5 days ago
         trial_end = datetime.now(timezone.utc) - timedelta(days=5)
@@ -117,17 +117,19 @@ class TestPlanLimits:
         assert limits.allow_advanced_reports == False
     
     def test_trial_with_no_end_date(self):
-        """Test trial with no end date is considered active."""
-        from app.subscriptions import PlanLimits
-        
+        """Pro + trialing without trial_end is treated as active paid (not open-ended trial perks)."""
+        from app.services.subscriptions import PlanLimits
+
         limits = PlanLimits("pro", status="trialing", trial_end=None)
-        
-        assert limits.is_on_trial == True
+
+        assert limits.status == "active"
+        assert limits.is_on_trial == False
         assert limits.is_active == True
+        assert limits.allow_advanced_reports == True
     
     def test_trial_with_z_suffix_timezone(self):
         """Test trial end parsing with Z suffix."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         # Future trial end with Z suffix
         trial_end = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -138,7 +140,7 @@ class TestPlanLimits:
     
     def test_past_due_status(self):
         """Test past_due status is not active."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         limits = PlanLimits("pro", status="past_due")
         
@@ -147,7 +149,7 @@ class TestPlanLimits:
     
     def test_canceled_status(self):
         """Test canceled status is not active."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         limits = PlanLimits("pro", status="canceled")
         
@@ -158,11 +160,11 @@ class TestPlanLimits:
 class TestEnforceLimits:
     """Tests for enforce_limits_on_create_product function."""
     
-    @patch('app.subscriptions.get_supabase_client')
-    @patch('app.subscriptions.get_store_plan')
+    @patch('app.services.subscriptions.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
     def test_enforce_limits_allows_under_limit(self, mock_get_plan, mock_get_supabase):
         """Test that products can be created when under limit."""
-        from app.subscriptions import enforce_limits_on_create_product, PlanLimits
+        from app.services.subscriptions import enforce_limits_on_create_product, PlanLimits
         
         # Mock free plan with 10 product limit
         mock_get_plan.return_value = PlanLimits("free", status="active")
@@ -179,11 +181,11 @@ class TestEnforceLimits:
         # Should not raise
         enforce_limits_on_create_product("test-store-id")
     
-    @patch('app.subscriptions.get_supabase_client')
-    @patch('app.subscriptions.get_store_plan')
+    @patch('app.services.subscriptions.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
     def test_enforce_limits_blocks_at_limit(self, mock_get_plan, mock_get_supabase):
         """Test that products cannot be created when at limit."""
-        from app.subscriptions import enforce_limits_on_create_product, PlanLimits
+        from app.services.subscriptions import enforce_limits_on_create_product, PlanLimits
         from fastapi import HTTPException
         
         # Mock free plan with 10 product limit
@@ -205,11 +207,11 @@ class TestEnforceLimits:
         assert exc_info.value.status_code == 402
         assert "Product limit reached" in exc_info.value.detail
     
-    @patch('app.subscriptions.get_supabase_client')
-    @patch('app.subscriptions.get_store_plan')
+    @patch('app.services.subscriptions.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
     def test_enforce_limits_allows_unlimited_for_pro(self, mock_get_plan, mock_get_supabase):
         """Test that pro plan has unlimited products."""
-        from app.subscriptions import enforce_limits_on_create_product, PlanLimits
+        from app.services.subscriptions import enforce_limits_on_create_product, PlanLimits
         
         # Mock pro plan with unlimited products
         mock_get_plan.return_value = PlanLimits("pro", status="active")
@@ -229,12 +231,12 @@ class TestGetStorePlan:
         
         # Need to reimport to pick up env var change
         import importlib
-        import app.subscriptions
-        importlib.reload(app.subscriptions)
+        import app.services.subscriptions
+        importlib.reload(app.services.subscriptions)
         
         # Now patch after reload
-        with patch('app.subscriptions.get_supabase_client') as mock_get_supabase:
-            from app.subscriptions import get_store_plan
+        with patch('app.services.subscriptions.get_supabase_client') as mock_get_supabase:
+            from app.services.subscriptions import get_store_plan
             
             mock_supabase = MagicMock()
             mock_query = MagicMock()
@@ -263,12 +265,12 @@ class TestGetStorePlan:
         
         # Need to reimport to pick up env var change
         import importlib
-        import app.subscriptions
-        importlib.reload(app.subscriptions)
+        import app.services.subscriptions
+        importlib.reload(app.services.subscriptions)
         
         # Now patch after reload
-        with patch('app.subscriptions.get_supabase_client') as mock_get_supabase:
-            from app.subscriptions import get_store_plan
+        with patch('app.services.subscriptions.get_supabase_client') as mock_get_supabase:
+            from app.services.subscriptions import get_store_plan
             
             mock_supabase = MagicMock()
             mock_supabase.table.side_effect = Exception("Database error")
@@ -287,10 +289,10 @@ class TestGetStorePlan:
         
         # Need to reimport to pick up env var change
         import importlib
-        import app.subscriptions
-        importlib.reload(app.subscriptions)
+        import app.services.subscriptions
+        importlib.reload(app.services.subscriptions)
         
-        from app.subscriptions import get_store_plan
+        from app.services.subscriptions import get_store_plan
         
         limits = get_store_plan("test-store-id")
         
@@ -300,17 +302,17 @@ class TestGetStorePlan:
         # Clean up
         os.environ.pop("DEV_PLAN_OVERRIDE", None)
         os.environ["DEV_PLAN_OVERRIDE"] = ""
-        importlib.reload(app.subscriptions)
+        importlib.reload(app.services.subscriptions)
 
 
 class TestGetPlanInfo:
     """Tests for get_plan_info function."""
     
-    @patch('app.subscriptions.get_supabase_client')
-    @patch('app.subscriptions.get_store_plan')
+    @patch('app.services.subscriptions.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
     def test_get_plan_info_returns_complete_info(self, mock_get_plan, mock_get_supabase):
         """Test get_plan_info returns all expected fields."""
-        from app.subscriptions import get_plan_info, PlanLimits
+        from app.services.subscriptions import get_plan_info, PlanLimits
         
         mock_get_plan.return_value = PlanLimits("pro", status="active")
         
@@ -324,7 +326,7 @@ class TestGetPlanInfo:
         mock_sub_query.execute.return_value.data = {
             "trial_end": None,
             "current_period_end": "2026-03-09T00:00:00Z",
-            "stripe_subscription_id": "sub_test123"
+            "paystack_subscription_code": "SUB_test123"
         }
         mock_sub_query.select.return_value = mock_sub_query
         mock_sub_query.eq.return_value = mock_sub_query

@@ -23,7 +23,7 @@ class TestRequestContext:
     
     def test_creates_context_with_correct_attributes(self):
         """Test that RequestContext stores attributes correctly."""
-        from app.deps import RequestContext
+        from app.api.deps import RequestContext
         
         ctx = RequestContext(
             user_id="user-123",
@@ -41,7 +41,7 @@ class TestCreateStoreAndProfile:
     
     def test_creates_new_store_and_profile(self):
         """Test creating a new store and profile for a user."""
-        from app.deps import _create_store_and_profile
+        from app.api.deps import _create_store_and_profile
         
         mock_supabase = MagicMock()
         
@@ -108,7 +108,7 @@ class TestCreateStoreAndProfile:
     
     def test_reuses_existing_store(self):
         """Test that existing store is reused."""
-        from app.deps import _create_store_and_profile
+        from app.api.deps import _create_store_and_profile
         
         mock_supabase = MagicMock()
         
@@ -157,7 +157,7 @@ class TestCreateStoreAndProfile:
     
     def test_raises_on_store_creation_failure(self):
         """Test that HTTPException is raised when store creation fails."""
-        from app.deps import _create_store_and_profile
+        from app.api.deps import _create_store_and_profile
         
         mock_supabase = MagicMock()
         
@@ -193,7 +193,7 @@ class TestCreateStoreAndProfile:
     
     def test_raises_on_profile_creation_failure(self):
         """Test that HTTPException is raised when profile creation fails."""
-        from app.deps import _create_store_and_profile
+        from app.api.deps import _create_store_and_profile
         
         mock_supabase = MagicMock()
         
@@ -240,7 +240,7 @@ class TestGetCurrentContext:
     
     def test_raises_on_missing_token(self):
         """Test that missing authorization header raises 401."""
-        from app.deps import get_current_context
+        from app.api.deps import get_current_context
         
         with pytest.raises(HTTPException) as exc:
             get_current_context(None)
@@ -250,18 +250,18 @@ class TestGetCurrentContext:
     
     def test_raises_on_invalid_token_format(self):
         """Test that invalid token format raises 401."""
-        from app.deps import get_current_context
+        from app.api.deps import get_current_context
         
         with pytest.raises(HTTPException) as exc:
             get_current_context("InvalidToken")
         
         assert exc.value.status_code == 401
     
-    @patch('app.deps.get_supabase_client')
-    @patch('app.deps.verify_supabase_jwt')
+    @patch('app.api.deps.get_supabase_client')
+    @patch('app.api.deps.verify_supabase_jwt')
     def test_returns_context_for_existing_profile(self, mock_verify, mock_supabase):
         """Test that context is returned for existing profile."""
-        from app.deps import get_current_context
+        from app.api.deps import get_current_context
         
         mock_verify.return_value = {"sub": "user-123"}
         
@@ -281,11 +281,11 @@ class TestGetCurrentContext:
         assert ctx.store_id == "store-456"
         assert ctx.role == "admin"
     
-    @patch('app.deps.get_supabase_client')
-    @patch('app.deps.verify_supabase_jwt')
+    @patch('app.api.deps.get_supabase_client')
+    @patch('app.api.deps.verify_supabase_jwt')
     def test_raises_on_missing_store_id(self, mock_verify, mock_supabase):
         """Test that missing store_id raises 500."""
-        from app.deps import get_current_context
+        from app.api.deps import get_current_context
         
         mock_verify.return_value = {"sub": "user-123"}
         
@@ -305,11 +305,11 @@ class TestGetCurrentContext:
         assert exc.value.status_code == 500
         assert "missing store_id" in exc.value.detail
     
-    @patch('app.deps.get_supabase_client')
-    @patch('app.deps.verify_supabase_jwt')
+    @patch('app.api.deps.get_supabase_client')
+    @patch('app.api.deps.verify_supabase_jwt')
     def test_raises_on_invalid_token(self, mock_verify, mock_supabase):
         """Test that invalid JWT raises 401."""
-        from app.deps import get_current_context
+        from app.api.deps import get_current_context
         
         mock_verify.side_effect = Exception("Invalid token")
         
@@ -318,11 +318,11 @@ class TestGetCurrentContext:
         
         assert exc.value.status_code == 401
     
-    @patch('app.deps.get_supabase_client')
-    @patch('app.deps.verify_supabase_jwt')
+    @patch('app.api.deps.get_supabase_client')
+    @patch('app.api.deps.verify_supabase_jwt')
     def test_handles_duplicate_key_error_on_profile_creation(self, mock_verify, mock_supabase):
         """Test that duplicate key error is handled gracefully."""
-        from app.deps import get_current_context, _create_store_and_profile
+        from app.api.deps import get_current_context, _create_store_and_profile
         
         mock_verify.return_value = {
             "sub": "user-123",
@@ -358,7 +358,7 @@ class TestGetCurrentContext:
         
         mock_supabase.return_value.table = table_router
         
-        with patch('app.deps._create_store_and_profile') as mock_create:
+        with patch('app.api.deps._create_store_and_profile') as mock_create:
             # Simulate duplicate key error
             mock_create.side_effect = Exception("23505 duplicate key violation")
             

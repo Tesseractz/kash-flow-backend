@@ -16,7 +16,7 @@ class TestIsEmailConfigured:
     
     def test_returns_false_when_not_configured(self):
         """Test that function returns False when BREVO_API_KEY is not set."""
-        from app.notifications import is_email_configured
+        from app.services.notifications import is_email_configured
         
         original = os.environ.get("BREVO_API_KEY")
         os.environ.pop("BREVO_API_KEY", None)
@@ -30,7 +30,7 @@ class TestIsEmailConfigured:
     
     def test_returns_true_when_configured(self):
         """Test that function returns True when BREVO_API_KEY is set."""
-        from app.notifications import is_email_configured
+        from app.services.notifications import is_email_configured
         
         original = os.environ.get("BREVO_API_KEY")
         os.environ["BREVO_API_KEY"] = "test-api-key"
@@ -50,7 +50,7 @@ class TestSendEmail:
     
     def test_returns_error_when_api_key_missing(self):
         """Test that error is returned when API key is not set."""
-        from app.notifications import send_email
+        from app.services.notifications import send_email
         
         original = os.environ.get("BREVO_API_KEY")
         os.environ.pop("BREVO_API_KEY", None)
@@ -66,7 +66,7 @@ class TestSendEmail:
     
     def test_returns_error_when_sender_email_missing(self):
         """Test that error is returned when sender email is not set."""
-        from app.notifications import send_email
+        from app.services.notifications import send_email
         
         original_key = os.environ.get("BREVO_API_KEY")
         original_sender = os.environ.get("BREVO_SENDER_EMAIL")
@@ -90,7 +90,7 @@ class TestSendEmail:
     @patch('httpx.post')
     def test_sends_email_successfully(self, mock_post):
         """Test successful email sending."""
-        from app.notifications import send_email
+        from app.services.notifications import send_email
         
         original_key = os.environ.get("BREVO_API_KEY")
         original_sender = os.environ.get("BREVO_SENDER_EMAIL")
@@ -121,7 +121,7 @@ class TestSendEmail:
     @patch('httpx.post')
     def test_handles_api_error(self, mock_post):
         """Test handling of API error response."""
-        from app.notifications import send_email
+        from app.services.notifications import send_email
         
         original_key = os.environ.get("BREVO_API_KEY")
         original_sender = os.environ.get("BREVO_SENDER_EMAIL")
@@ -153,7 +153,7 @@ class TestSendEmail:
     @patch('httpx.post')
     def test_handles_timeout(self, mock_post):
         """Test handling of timeout error."""
-        from app.notifications import send_email
+        from app.services.notifications import send_email
         import httpx
         
         original_key = os.environ.get("BREVO_API_KEY")
@@ -182,7 +182,7 @@ class TestSendEmail:
     @patch('httpx.post')
     def test_handles_unauthorized_sender_error(self, mock_post):
         """Test handling of unauthorized sender error."""
-        from app.notifications import send_email
+        from app.services.notifications import send_email
         
         original_key = os.environ.get("BREVO_API_KEY")
         original_sender = os.environ.get("BREVO_SENDER_EMAIL")
@@ -217,7 +217,7 @@ class TestGenerateReceiptHtml:
     
     def test_generates_html_with_items(self):
         """Test that receipt HTML is generated correctly."""
-        from app.notifications import generate_receipt_html
+        from app.services.notifications import generate_receipt_html
         
         sale_data = {
             "id": 123,
@@ -239,7 +239,7 @@ class TestGenerateReceiptHtml:
     
     def test_includes_cash_payment_info(self):
         """Test that cash payment info is included."""
-        from app.notifications import generate_receipt_html
+        from app.services.notifications import generate_receipt_html
         
         sale_data = {
             "id": 456,
@@ -259,7 +259,7 @@ class TestGenerateReceiptHtml:
     
     def test_includes_card_payment_info(self):
         """Test that card payment info is included."""
-        from app.notifications import generate_receipt_html
+        from app.services.notifications import generate_receipt_html
         
         sale_data = {
             "id": 789,
@@ -279,7 +279,7 @@ class TestGenerateLowStockEmail:
     
     def test_generates_alert_email(self):
         """Test that low stock alert email is generated correctly."""
-        from app.notifications import generate_low_stock_email
+        from app.services.notifications import generate_low_stock_email
         
         products = [
             {"name": "Low Item 1", "sku": "LI1", "quantity": 3},
@@ -298,7 +298,7 @@ class TestGenerateLowStockEmail:
     
     def test_handles_missing_sku(self):
         """Test that missing SKU is handled."""
-        from app.notifications import generate_low_stock_email
+        from app.services.notifications import generate_low_stock_email
         
         products = [
             {"name": "No SKU Item", "quantity": 2},
@@ -315,7 +315,7 @@ class TestGenerateDailySummaryEmail:
     
     def test_generates_summary_email(self):
         """Test that daily summary email is generated correctly."""
-        from app.notifications import generate_daily_summary_email
+        from app.services.notifications import generate_daily_summary_email
         
         summary = {
             "date_label": "2026-02-09",
@@ -341,7 +341,7 @@ class TestNotificationModels:
     
     def test_notification_config_defaults(self):
         """Test NotificationConfig default values."""
-        from app.notifications import NotificationConfig
+        from app.services.notifications import NotificationConfig
         
         config = NotificationConfig()
         
@@ -351,7 +351,7 @@ class TestNotificationModels:
     
     def test_receipt_request_defaults(self):
         """Test ReceiptRequest default values."""
-        from app.notifications import ReceiptRequest
+        from app.services.notifications import ReceiptRequest
         
         request = ReceiptRequest(sale_id=123)
         
@@ -362,7 +362,7 @@ class TestNotificationModels:
     
     def test_notification_result_success(self):
         """Test NotificationResult creation."""
-        from app.notifications import NotificationResult
+        from app.services.notifications import NotificationResult
         
         result = NotificationResult(
             success=True,

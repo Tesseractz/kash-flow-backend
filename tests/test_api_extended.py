@@ -23,7 +23,7 @@ os.environ.pop("DEV_PLAN_OVERRIDE", None)
 
 def create_mock_context(user_id="test-user-id", store_id="test-store-id", role="admin"):
     """Create a mock RequestContext."""
-    from app.deps import RequestContext
+    from app.api.deps import RequestContext
     return RequestContext(user_id=user_id, store_id=store_id, role=role)
 
 
@@ -31,7 +31,7 @@ def create_mock_context(user_id="test-user-id", store_id="test-store-id", role="
 def admin_client():
     """Create test client with admin role."""
     from app.main import app
-    from app.deps import get_current_context
+    from app.api.deps import get_current_context
     
     app.dependency_overrides[get_current_context] = lambda: create_mock_context(role="admin")
     
@@ -45,7 +45,7 @@ def admin_client():
 def cashier_client():
     """Create test client with cashier role."""
     from app.main import app
-    from app.deps import get_current_context
+    from app.api.deps import get_current_context
     
     app.dependency_overrides[get_current_context] = lambda: create_mock_context(role="cashier")
     
@@ -58,7 +58,7 @@ def cashier_client():
 class TestProfileAPI:
     """Tests for profile endpoint."""
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_get_profile_success(self, mock_supabase, admin_client):
         """Test getting profile successfully."""
         profile_data = {
@@ -82,7 +82,7 @@ class TestProfileAPI:
         assert data["name"] == "Test Admin"
         assert data["role"] == "admin"
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_get_profile_fallback(self, mock_supabase, admin_client):
         """Test profile fallback when no profile in DB."""
         mock_query = MagicMock()
@@ -102,11 +102,11 @@ class TestProfileAPI:
 class TestUserInviteAPI:
     """Tests for user invite endpoint."""
     
-    @patch('app.main.get_store_plan')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.db.supabase.get_supabase_client')
     def test_invite_user_limit_reached(self, mock_supabase, mock_plan, admin_client):
         """Test that user limit is enforced."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("free", status="active")
         
@@ -134,11 +134,11 @@ class TestUserInviteAPI:
         
         assert response.status_code == 403
     
-    @patch('app.main.get_store_plan')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.db.supabase.get_supabase_client')
     def test_invite_user_invalid_role(self, mock_supabase, mock_plan, admin_client):
         """Test that invalid role is rejected."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("pro", status="active")
         
@@ -160,7 +160,7 @@ class TestUserInviteAPI:
 class TestUserRoleUpdateAPI:
     """Tests for user role update endpoint."""
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_update_role_success(self, mock_supabase, admin_client):
         """Test updating user role successfully."""
         mock_supabase_instance = MagicMock()
@@ -236,7 +236,7 @@ class TestUserRoleUpdateAPI:
         
         assert response.status_code == 403
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_update_role_invalid_role(self, mock_supabase, admin_client):
         """Test that invalid role is rejected."""
         response = admin_client.put(
@@ -250,7 +250,7 @@ class TestUserRoleUpdateAPI:
 class TestUserDeleteAPI:
     """Tests for user delete endpoint."""
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_delete_user_success(self, mock_supabase, admin_client):
         """Test deleting user successfully."""
         mock_supabase_instance = MagicMock()
@@ -321,7 +321,7 @@ class TestUserDeleteAPI:
 class TestUserCredentialsAPI:
     """Tests for user credentials endpoint."""
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_get_credentials_success(self, mock_supabase, admin_client):
         """Test getting user credentials successfully."""
         from app.main import _encrypt_password
@@ -352,7 +352,7 @@ class TestUserCredentialsAPI:
         data = response.json()
         assert data["password"] == "test-password-123"
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_get_credentials_no_password_stored(self, mock_supabase, admin_client):
         """Test error when password is not stored."""
         mock_query = MagicMock()
@@ -389,7 +389,7 @@ class TestUserCredentialsAPI:
 class TestNotificationsStatusAPI:
     """Tests for notification status endpoint."""
     
-    @patch('app.main.is_email_configured')
+    @patch('app.services.notifications.is_email_configured')
     def test_get_notification_status(self, mock_configured, admin_client):
         """Test getting notification status."""
         mock_configured.return_value = True
@@ -404,7 +404,7 @@ class TestNotificationsStatusAPI:
 class TestNotificationSettingsAPI:
     """Tests for notification settings endpoints."""
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_get_notification_settings(self, mock_supabase, admin_client):
         """Test getting notification settings."""
         mock_query = MagicMock()
@@ -424,7 +424,7 @@ class TestNotificationSettingsAPI:
         data = response.json()
         assert data["notification_email"] == "alerts@test.com"
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_update_notification_settings(self, mock_supabase, admin_client):
         """Test updating notification settings."""
         mock_query = MagicMock()
@@ -451,10 +451,10 @@ class TestNotificationSettingsAPI:
 class TestLowStockNotificationAPI:
     """Tests for low stock notification endpoint."""
     
-    @patch('app.main.get_store_plan')
+    @patch('app.services.subscriptions.get_store_plan')
     def test_low_stock_notification_blocked_for_free(self, mock_plan, admin_client):
         """Test that free plan cannot send low stock notifications."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("free", status="active")
         
@@ -465,11 +465,11 @@ class TestLowStockNotificationAPI:
         
         assert response.status_code == 402
     
-    @patch('app.main.get_store_plan')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.subscriptions.get_store_plan')
+    @patch('app.db.supabase.get_supabase_client')
     def test_low_stock_notification_no_products(self, mock_supabase, mock_plan, admin_client):
         """Test notification with no low stock products."""
-        from app.subscriptions import PlanLimits
+        from app.services.subscriptions import PlanLimits
         
         mock_plan.return_value = PlanLimits("pro", status="active")
         
@@ -495,7 +495,7 @@ class TestLowStockNotificationAPI:
 class TestDailySummaryNotificationAPI:
     """Tests for daily summary notification endpoint."""
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_daily_summary_without_email(self, mock_supabase, admin_client):
         """Test daily summary when email not configured."""
         mock_supabase_instance = MagicMock()
@@ -547,7 +547,7 @@ class TestDailySummaryNotificationAPI:
 class TestReceiptAPI:
     """Tests for receipt sending endpoint."""
     
-    @patch('app.main.get_supabase_client')
+    @patch('app.db.supabase.get_supabase_client')
     def test_send_receipt_sale_not_found(self, mock_supabase, admin_client):
         """Test error when sale is not found."""
         mock_query = MagicMock()
@@ -564,12 +564,12 @@ class TestReceiptAPI:
         
         assert response.status_code == 404
     
-    @patch('app.main.generate_receipt_html')
-    @patch('app.main.send_email')
-    @patch('app.main.get_supabase_client')
+    @patch('app.services.notifications.generate_receipt_html')
+    @patch('app.services.notifications.send_email')
+    @patch('app.db.supabase.get_supabase_client')
     def test_send_receipt_email_success(self, mock_supabase, mock_send_email, mock_gen_html, admin_client):
         """Test sending receipt email successfully."""
-        from app.notifications import NotificationResult
+        from app.services.notifications import NotificationResult
         
         mock_supabase_instance = MagicMock()
         
@@ -631,79 +631,6 @@ class TestReceiptAPI:
         assert data["success"] is True
 
 
-class TestStripeWebhookAPI:
-    """Tests for Stripe webhook endpoint."""
-    
-    @patch('app.main.get_supabase_client')
-    @patch('app.main.get_stripe_client')
-    def test_webhook_missing_secret(self, mock_stripe, mock_supabase):
-        """Test error when webhook secret is missing."""
-        from app.main import app
-        
-        original = os.environ.get("STRIPE_WEBHOOK_SECRET")
-        original_provider = os.environ.get("BILLING_PROVIDER")
-        os.environ["BILLING_PROVIDER"] = "stripe"
-        os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
-        
-        mock_supabase.return_value = MagicMock()
-        mock_stripe.return_value = MagicMock()
-        
-        client = TestClient(app, raise_server_exceptions=False)
-        
-        try:
-            response = client.post(
-                "/stripe/webhook",
-                content=b'{}',
-                headers={"stripe-signature": "test-sig"}
-            )
-            
-            assert response.status_code == 500
-            assert "STRIPE_WEBHOOK_SECRET" in response.json()["detail"]
-        finally:
-            if original:
-                os.environ["STRIPE_WEBHOOK_SECRET"] = original
-            else:
-                os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
-            if original_provider is not None:
-                os.environ["BILLING_PROVIDER"] = original_provider
-            else:
-                os.environ.pop("BILLING_PROVIDER", None)
-    
-    @patch('app.main.get_supabase_client')
-    @patch('app.main.get_stripe_client')
-    def test_webhook_missing_signature(self, mock_stripe, mock_supabase):
-        """Test error when signature header is missing."""
-        from app.main import app
-        
-        original = os.environ.get("STRIPE_WEBHOOK_SECRET")
-        original_provider = os.environ.get("BILLING_PROVIDER")
-        os.environ["BILLING_PROVIDER"] = "stripe"
-        os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test"
-        
-        mock_supabase.return_value = MagicMock()
-        mock_stripe.return_value = MagicMock()
-        
-        client = TestClient(app, raise_server_exceptions=False)
-        
-        try:
-            response = client.post(
-                "/stripe/webhook",
-                content=b'{}'
-            )
-            
-            assert response.status_code == 400
-            assert "signature" in response.json()["detail"].lower()
-        finally:
-            if original:
-                os.environ["STRIPE_WEBHOOK_SECRET"] = original
-            else:
-                os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
-            if original_provider is not None:
-                os.environ["BILLING_PROVIDER"] = original_provider
-            else:
-                os.environ.pop("BILLING_PROVIDER", None)
-
-
 class TestBillingCheckoutAPI:
     """Tests for billing checkout endpoint."""
     
@@ -717,25 +644,11 @@ class TestBillingCheckoutAPI:
         assert response.status_code == 403
 
 
-class TestBillingPortalAPI:
-    """Tests for billing portal endpoint."""
-    
-    def test_portal_forbidden_for_cashier(self, cashier_client):
-        """Test that cashiers cannot access billing portal."""
-        response = cashier_client.post("/billing/portal")
-        
+class TestBillingCancelAPI:
+    """Tests for billing cancel endpoint."""
+
+    def test_cancel_forbidden_for_cashier(self, cashier_client):
+        """Test that cashiers cannot cancel subscriptions."""
+        response = cashier_client.post("/billing/cancel")
+
         assert response.status_code == 403
-    
-    @patch('app.main.get_supabase_client')
-    def test_portal_no_subscription(self, mock_supabase, admin_client):
-        """Test error when no subscription exists."""
-        mock_query = MagicMock()
-        mock_query.execute.side_effect = Exception("No subscription")
-        mock_query.select.return_value = mock_query
-        mock_query.eq.return_value = mock_query
-        mock_query.single.return_value = mock_query
-        mock_supabase.return_value.table.return_value = mock_query
-        
-        response = admin_client.post("/billing/portal")
-        
-        assert response.status_code == 400

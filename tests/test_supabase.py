@@ -16,7 +16,7 @@ class TestGetSupabaseClient:
     
     def test_returns_client(self):
         """Test that a Supabase client is returned."""
-        import app.supabase_client as sb_module
+        import app.db.supabase as sb_module
         
         # Reset singleton
         sb_module._client = None
@@ -27,7 +27,7 @@ class TestGetSupabaseClient:
         os.environ["SUPABASE_URL"] = "https://test.supabase.co"
         os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-service-key"
         
-        with patch('app.supabase_client.create_client') as mock_create:
+        with patch('app.db.supabase.create_client') as mock_create:
             mock_client = MagicMock()
             mock_create.return_value = mock_client
             
@@ -50,7 +50,7 @@ class TestGetSupabaseClient:
     
     def test_returns_singleton(self):
         """Test that the same client instance is returned on subsequent calls."""
-        import app.supabase_client as sb_module
+        import app.db.supabase as sb_module
         
         mock_client = MagicMock()
         sb_module._client = mock_client
@@ -66,7 +66,7 @@ class TestGetSupabaseClient:
     
     def test_raises_on_missing_url(self):
         """Test that an error is raised when SUPABASE_URL is missing."""
-        import app.supabase_client as sb_module
+        import app.db.supabase as sb_module
         
         original_url = os.environ.get("SUPABASE_URL")
         original_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -76,8 +76,8 @@ class TestGetSupabaseClient:
         
         try:
             # Mock both create_client and load_dotenv to prevent .env from overriding our test env
-            with patch('app.supabase_client.create_client') as mock_create, \
-                 patch('app.supabase_client.load_dotenv'):
+            with patch('app.db.supabase.create_client') as mock_create, \
+                 patch('app.db.supabase.load_dotenv'):
                 # Reset singleton inside the patch context
                 sb_module._client = None
                 
@@ -101,7 +101,7 @@ class TestGetSupabaseClient:
     
     def test_raises_on_missing_key(self):
         """Test that an error is raised when SUPABASE_SERVICE_ROLE_KEY is missing."""
-        import app.supabase_client as sb_module
+        import app.db.supabase as sb_module
         
         original_url = os.environ.get("SUPABASE_URL")
         original_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -111,8 +111,8 @@ class TestGetSupabaseClient:
         
         try:
             # Mock both create_client and load_dotenv to prevent .env from overriding our test env
-            with patch('app.supabase_client.create_client') as mock_create, \
-                 patch('app.supabase_client.load_dotenv'):
+            with patch('app.db.supabase.create_client') as mock_create, \
+                 patch('app.db.supabase.load_dotenv'):
                 # Reset singleton inside the patch context
                 sb_module._client = None
                 

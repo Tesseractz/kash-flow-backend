@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from datetime import datetime, timezone, timedelta
 
 from app.main import app
-from app.deps import get_current_context, RequestContext
+from app.api.deps import get_current_context, RequestContext
 
 
 # Helper to create admin context
@@ -40,7 +40,7 @@ class TestCategoriesAPI:
         
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.db.supabase.get_supabase_client') as mock_sb:
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.order.return_value.execute.return_value.data = mock_categories
@@ -60,7 +60,7 @@ class TestCategoriesAPI:
         
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.db.supabase.get_supabase_client') as mock_sb:
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.insert.return_value.execute.return_value.data = [created_category]
@@ -90,7 +90,7 @@ class TestCategoriesAPI:
         
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.db.supabase.get_supabase_client') as mock_sb:
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [updated_category]
@@ -107,7 +107,7 @@ class TestCategoriesAPI:
         """Test deleting a category"""
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.db.supabase.get_supabase_client') as mock_sb:
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.delete.return_value.eq.return_value.eq.return_value.execute.return_value = None
@@ -125,6 +125,7 @@ class TestCustomersAPI:
 
     def test_list_customers_success(self):
         """Test listing customers"""
+        from app.services.subscriptions import PlanLimits
         mock_customers = [
             {"id": "cust-1", "store_id": "test-store-id", "name": "John Doe", "email": "john@example.com"},
             {"id": "cust-2", "store_id": "test-store-id", "name": "Jane Smith", "phone": "+27123456789"},
@@ -132,7 +133,8 @@ class TestCustomersAPI:
         
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.services.subscriptions.get_store_plan') as mock_plan, patch('app.db.supabase.get_supabase_client') as mock_sb:
+            mock_plan.return_value = PlanLimits("pro", status="active")
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = mock_customers
@@ -147,11 +149,13 @@ class TestCustomersAPI:
 
     def test_get_customer_success(self):
         """Test getting a single customer"""
+        from app.services.subscriptions import PlanLimits
         mock_customer = {"id": "cust-1", "store_id": "test-store-id", "name": "John Doe", "loyalty_points": 100}
         
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.services.subscriptions.get_store_plan') as mock_plan, patch('app.db.supabase.get_supabase_client') as mock_sb:
+            mock_plan.return_value = PlanLimits("pro", status="active")
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.single.return_value.execute.return_value.data = mock_customer
@@ -166,12 +170,14 @@ class TestCustomersAPI:
 
     def test_create_customer_success(self):
         """Test creating a customer"""
+        from app.services.subscriptions import PlanLimits
         new_customer = {"name": "New Customer", "email": "new@example.com", "phone": "+27111222333"}
         created_customer = {"id": "cust-new", "store_id": "test-store-id", **new_customer, "loyalty_points": 0}
         
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.services.subscriptions.get_store_plan') as mock_plan, patch('app.db.supabase.get_supabase_client') as mock_sb:
+            mock_plan.return_value = PlanLimits("pro", status="active")
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.insert.return_value.execute.return_value.data = [created_customer]
@@ -197,11 +203,13 @@ class TestCustomersAPI:
 
     def test_update_customer_success(self):
         """Test updating a customer"""
+        from app.services.subscriptions import PlanLimits
         updated_customer = {"id": "cust-1", "store_id": "test-store-id", "name": "Updated Name", "email": "updated@example.com"}
         
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.services.subscriptions.get_store_plan') as mock_plan, patch('app.db.supabase.get_supabase_client') as mock_sb:
+            mock_plan.return_value = PlanLimits("pro", status="active")
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [updated_customer]
@@ -217,7 +225,7 @@ class TestCustomersAPI:
         """Test deleting a customer"""
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.db.supabase.get_supabase_client') as mock_sb:
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.delete.return_value.eq.return_value.eq.return_value.execute.return_value = None
@@ -233,7 +241,7 @@ class TestCustomersAPI:
         """Test adding loyalty points to a customer"""
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.db.supabase.get_supabase_client') as mock_sb:
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             # First call to get current points
@@ -259,13 +267,15 @@ class TestCustomersAPI:
 
     def test_get_customer_purchases(self):
         """Test getting customer purchase history"""
+        from app.services.subscriptions import PlanLimits
         mock_purchases = [
             {"id": 1, "product_id": 1, "quantity_sold": 2, "total_price": 200, "timestamp": "2026-02-09T10:00:00Z"},
         ]
         
         app.dependency_overrides[get_current_context] = make_admin_context
         
-        with patch('app.main.get_supabase_client') as mock_sb:
+        with patch('app.services.subscriptions.get_store_plan') as mock_plan, patch('app.db.supabase.get_supabase_client') as mock_sb:
+            mock_plan.return_value = PlanLimits("pro", status="active")
             mock_client = MagicMock()
             mock_sb.return_value = mock_client
             mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = mock_purchases

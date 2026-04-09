@@ -1,7 +1,8 @@
 import os
 from typing import Optional
-from supabase import create_client, Client
+
 from dotenv import load_dotenv
+from supabase import Client, create_client
 
 _client: Optional[Client] = None
 
@@ -14,7 +15,6 @@ def get_supabase_client() -> Client:
     if _client is not None:
         return _client
 
-    # Load .env if present
     load_dotenv()
 
     supabase_url = os.getenv("SUPABASE_URL")
@@ -27,5 +27,3 @@ def get_supabase_client() -> Client:
 
     _client = create_client(supabase_url, supabase_key)
     return _client
-
-

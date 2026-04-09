@@ -1,25 +1,30 @@
 import os
 from datetime import datetime, timezone
 from typing import Optional
+
 from fastapi import HTTPException
-from .supabase_client import get_supabase_client
+
+from app.db.supabase import get_supabase_client
 
 DEV_PLAN_OVERRIDE = os.getenv("DEV_PLAN_OVERRIDE", "").lower()
 
 
 class PlanLimits:
     def __init__(self, plan: str, status: str = "active", trial_end: Optional[str] = None):
-        self.plan = plan
-        self.status = status
+        normalized_plan = "pro" if plan == "business" else plan
+        self.plan = normalized_plan
+        st = status
+        if normalized_plan in ("pro", "business") and st == "trialing" and not trial_end:
+            st = "active"
+        self.status = st
         self.trial_end = trial_end
         self._is_trial_active = self._check_trial_active()
 
     def _check_trial_active(self) -> bool:
-        """Check if trial is still active."""
         if self.status != "trialing":
             return False
         if not self.trial_end:
-            return True
+            return False
         try:
             trial_dt = datetime.fromisoformat(self.trial_end.replace("Z", "+00:00"))
             return datetime.now(timezone.utc) < trial_dt
@@ -28,8 +33,7 @@ class PlanLimits:
 
     @property
     def is_active(self) -> bool:
-        """Check if subscription is active (paid or valid trial)."""
-        if self.status == "active":
+        if self.status == "active" and self.plan in ("pro", "business"):
             return True
         if self.status == "trialing" and self._is_trial_active:
             return True
@@ -37,62 +41,50 @@ class PlanLimits:
 
     @property
     def is_on_trial(self) -> bool:
-        """Check if user is currently on an active trial."""
         return self.status == "trialing" and self._is_trial_active
 
     @property
     def max_products(self) -> Optional[int]:
-        # During trial: unlimited products
         if self.is_on_trial:
             return None
-        # Active PAID subscription (pro/business): unlimited
         if self.is_active and self.plan in ("pro", "business"):
             return None
-        # Free or expired: 10 products
         return 10
 
     @property
     def max_users(self) -> int:
-        # During trial: unlimited users (full access)
         if self.is_on_trial:
             return 999
-        # Active PAID subscription: Pro is full-access (single plan)
         if self.is_active and self.plan in ("pro", "business"):
             return 999
-        # Free or expired: 1 user only
         return 1
 
     @property
     def allow_multiple_users(self) -> bool:
-        # During trial: full access
         if self.is_on_trial:
             return True
         return self.is_active and self.plan in ("pro", "business")
 
     @property
     def allow_csv_export(self) -> bool:
-        # During trial: full access
         if self.is_on_trial:
             return True
         return self.is_active and self.plan in ("pro", "business")
 
     @property
     def allow_low_stock_alerts(self) -> bool:
-        # During trial: full access
         if self.is_on_trial:
             return True
         return self.is_active and self.plan in ("pro", "business")
 
     @property
     def allow_audit_logs(self) -> bool:
-        # During trial: full access
         if self.is_on_trial:
             return True
         return self.is_active and self.plan in ("pro", "business")
 
     @property
     def allow_advanced_reports(self) -> bool:
-        # During trial: full access
         if self.is_on_trial:
             return True
         return self.is_active and self.plan in ("pro", "business")
@@ -100,10 +92,9 @@ class PlanLimits:
 
 def get_store_plan(store_id: str) -> PlanLimits:
     if DEV_PLAN_OVERRIDE in ("pro", "business"):
-        # Single-plan billing: normalize legacy "business" to "pro"
         normalized = "pro" if DEV_PLAN_OVERRIDE == "business" else DEV_PLAN_OVERRIDE
         return PlanLimits(normalized, status="active")
-    
+
     supa = get_supabase_client()
     try:
         res = supa.table("subscriptions").select("*").eq("store_id", store_id).single().execute()
@@ -111,10 +102,8 @@ def get_store_plan(store_id: str) -> PlanLimits:
         plan = data.get("plan", "expired")
         status = data.get("status", "expired")
         trial_end = data.get("trial_end")
-        
-        # Single-plan billing: normalize legacy "business" to "pro" for limits
-        normalized = "pro" if plan == "business" else plan
-        return PlanLimits(normalized, status=status, trial_end=trial_end)
+
+        return PlanLimits(plan, status=status, trial_end=trial_end)
     except Exception:
         return PlanLimits("expired", status="expired")
 
@@ -134,15 +123,15 @@ def enforce_limits_on_create_product(store_id: str):
 def get_plan_info(store_id: str) -> dict:
     limits = get_store_plan(store_id)
     supa = get_supabase_client()
-    
+
     product_count = len((supa.table("products").select("id").eq("store_id", store_id).execute()).data or [])
-    
+
     try:
         sub_res = supa.table("subscriptions").select("*").eq("store_id", store_id).single().execute()
         sub_data = sub_res.data or {}
     except Exception:
         sub_data = {}
-    
+
     return {
         "plan": limits.plan,
         "status": limits.status,
@@ -150,7 +139,8 @@ def get_plan_info(store_id: str) -> dict:
         "is_on_trial": limits.is_on_trial,
         "trial_end": sub_data.get("trial_end"),
         "current_period_end": sub_data.get("current_period_end"),
-        "has_stripe_subscription": bool(sub_data.get("stripe_subscription_id")),
+        "has_paystack_subscription": bool(sub_data.get("paystack_subscription_code")),
+        "billing_provider": sub_data.get("billing_provider"),
         "limits": {
             "max_products": limits.max_products,
             "max_users": limits.max_users,
@@ -161,5 +151,5 @@ def get_plan_info(store_id: str) -> dict:
         },
         "usage": {
             "products": product_count,
-        }
+        },
     }

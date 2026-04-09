@@ -15,10 +15,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 class TestGetAnalytics:
     """Tests for get_analytics function."""
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_returns_empty_analytics_when_no_sales(self, mock_get_supabase):
         """Test that analytics returns zeros when there are no sales."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         mock_supabase = MagicMock()
         mock_query = MagicMock()
@@ -39,10 +39,10 @@ class TestGetAnalytics:
         assert result.profit_margin == 0
         assert result.period_days == 30
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_calculates_total_revenue_correctly(self, mock_get_supabase):
         """Test that total revenue is calculated correctly."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         now = datetime.now(timezone.utc)
         sales_data = [
@@ -87,10 +87,10 @@ class TestGetAnalytics:
         assert result.total_revenue == 650.0
         assert result.total_sales == 3
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_calculates_profit_correctly(self, mock_get_supabase):
         """Test that profit is calculated as revenue minus cost."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         now = datetime.now(timezone.utc)
         # Sale of 2 units at $100 each (total $200), cost is $60 each
@@ -130,10 +130,10 @@ class TestGetAnalytics:
         
         assert result.total_profit == 80.0
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_handles_missing_cost_price(self, mock_get_supabase):
         """Test that missing cost_price defaults to 0."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         now = datetime.now(timezone.utc)
         sales_data = [
@@ -173,10 +173,10 @@ class TestGetAnalytics:
         # Profit = Revenue - (cost * qty) = 200 - (0 * 2) = 200
         assert result.total_profit == 200.0
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_calculates_average_transaction_value(self, mock_get_supabase):
         """Test average transaction value calculation."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         now = datetime.now(timezone.utc)
         sales_data = [
@@ -215,10 +215,10 @@ class TestGetAnalytics:
         # Average: (100 + 200 + 300) / 3 = 200
         assert result.avg_transaction_value == 200.0
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_identifies_best_and_worst_days(self, mock_get_supabase):
         """Test that best and worst days are correctly identified."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         now = datetime.now(timezone.utc)
         yesterday = now - timedelta(days=1)
@@ -263,10 +263,10 @@ class TestGetAnalytics:
         assert result.best_day_revenue == 1000.0
         assert result.worst_day_revenue == 200.0
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_generates_sales_trends_for_all_days(self, mock_get_supabase):
         """Test that sales trends include all days in period, even zero-sales days."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         now = datetime.now(timezone.utc)
         # Only one sale 3 days ago
@@ -310,10 +310,10 @@ class TestGetAnalytics:
         zero_days = [t for t in result.sales_trends if t.revenue == 0]
         assert len(zero_days) >= 6
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_generates_top_products(self, mock_get_supabase):
         """Test that top products are correctly identified and sorted."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         now = datetime.now(timezone.utc)
         sales_data = [
@@ -361,10 +361,10 @@ class TestGetAnalytics:
         assert result.top_products[0].total_revenue == 1000.0
         assert result.top_products[0].name == "Product 3"
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_generates_hourly_breakdown(self, mock_get_supabase):
         """Test hourly breakdown is generated for all 24 hours."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         now = datetime.now(timezone.utc)
         sales_data = [
@@ -409,10 +409,10 @@ class TestGetAnalytics:
 class TestAnalyticsEdgeCases:
     """Test edge cases in analytics calculations."""
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_handles_database_error_for_sales(self, mock_get_supabase):
         """Test graceful handling of database errors."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         mock_supabase = MagicMock()
         mock_query = MagicMock()
@@ -430,10 +430,10 @@ class TestAnalyticsEdgeCases:
         assert result.total_revenue == 0
         assert result.total_sales == 0
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_handles_invalid_timestamp_format(self, mock_get_supabase):
         """Test handling of invalid timestamp formats."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         sales_data = [
             {"id": 1, "product_id": 1, "quantity_sold": 1, "total_price": 100.0, "timestamp": "invalid-date"},
@@ -471,10 +471,10 @@ class TestAnalyticsEdgeCases:
         # Total revenue should still be calculated (skipping invalid ones)
         assert result.total_revenue >= 0
     
-    @patch('app.analytics.get_supabase_client')
+    @patch('app.services.analytics.get_supabase_client')
     def test_handles_returns_negative_quantity(self, mock_get_supabase):
         """Test handling of returns (negative quantity)."""
-        from app.analytics import get_analytics
+        from app.services.analytics import get_analytics
         
         now = datetime.now(timezone.utc)
         sales_data = [

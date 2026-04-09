@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from uuid import uuid4
 
 from app.main import app
-from app.deps import get_current_context, RequestContext
+from app.api.deps import get_current_context, RequestContext
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ def client():
 # ============================================
 class TestConsentsAPI:
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_get_user_consents(self, mock_supabase, client, user_context):
         """User can get their consent records."""
         mock_client = MagicMock()
@@ -62,8 +62,8 @@ class TestConsentsAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
     def test_update_consent(self, mock_audit, mock_supabase, client, user_context):
         """User can update their consent."""
         mock_client = MagicMock()
@@ -97,7 +97,7 @@ class TestConsentsAPI:
 # ============================================
 class TestPrivacySettingsAPI:
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_get_privacy_settings(self, mock_supabase, client, user_context):
         """User can get their privacy settings."""
         mock_client = MagicMock()
@@ -119,8 +119,8 @@ class TestPrivacySettingsAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
     def test_update_privacy_settings(self, mock_audit, mock_supabase, client, user_context):
         """User can update privacy settings."""
         mock_client = MagicMock()
@@ -149,7 +149,7 @@ class TestPrivacySettingsAPI:
 # ============================================
 class TestSessionsAPI:
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_get_sessions(self, mock_supabase, client, user_context):
         """User can get their active sessions."""
         mock_client = MagicMock()
@@ -175,8 +175,8 @@ class TestSessionsAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
     def test_revoke_session(self, mock_audit, mock_supabase, client, user_context):
         """User can revoke a specific session."""
         mock_client = MagicMock()
@@ -192,8 +192,8 @@ class TestSessionsAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
     def test_revoke_all_sessions(self, mock_audit, mock_supabase, client, user_context):
         """User can revoke all other sessions."""
         mock_client = MagicMock()
@@ -213,8 +213,8 @@ class TestSessionsAPI:
 # ============================================
 class TestDataExportAPI:
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
     def test_request_data_export(self, mock_audit, mock_supabase, client, user_context):
         """User can request data export."""
         mock_client = MagicMock()
@@ -239,7 +239,7 @@ class TestDataExportAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_request_data_export_already_pending(self, mock_supabase, client, user_context):
         """Cannot request export if one is pending."""
         mock_client = MagicMock()
@@ -256,7 +256,7 @@ class TestDataExportAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_get_data_export_requests(self, mock_supabase, client, user_context):
         """User can get their export requests."""
         mock_client = MagicMock()
@@ -281,8 +281,8 @@ class TestDataExportAPI:
 # ============================================
 class TestAccountDeletionAPI:
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
     def test_request_account_deletion(self, mock_audit, mock_supabase, client, user_context):
         """User can request account deletion."""
         mock_client = MagicMock()
@@ -312,7 +312,7 @@ class TestAccountDeletionAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_request_deletion_already_pending(self, mock_supabase, client, user_context):
         """Cannot request deletion if one is pending."""
         mock_client = MagicMock()
@@ -331,8 +331,8 @@ class TestAccountDeletionAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
-    @patch("app.main.log_audit_event")
+    @patch("app.db.supabase.get_supabase_client")
+    @patch("app.services.audit_log.log_audit_event")
     def test_cancel_account_deletion(self, mock_audit, mock_supabase, client, user_context):
         """User can cancel a pending deletion request."""
         mock_client = MagicMock()
@@ -357,7 +357,7 @@ class TestAccountDeletionAPI:
 # ============================================
 class TestCookiePreferencesAPI:
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_save_cookie_preferences(self, mock_supabase, client, user_context):
         """User can save cookie preferences."""
         mock_client = MagicMock()
@@ -386,7 +386,7 @@ class TestCookiePreferencesAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_get_cookie_preferences(self, mock_supabase, client, user_context):
         """User can get cookie preferences."""
         mock_client = MagicMock()
@@ -407,7 +407,7 @@ class TestCookiePreferencesAPI:
         finally:
             app.dependency_overrides.clear()
     
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_get_cookie_preferences_default(self, mock_supabase, client, user_context):
         """Returns default preferences if none set."""
         mock_client = MagicMock()
@@ -467,7 +467,7 @@ class TestPrivacyEdgeCases:
         assert response.status_code == 401
         assert "Missing token" in response.json()["detail"]
 
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_save_cookie_preferences_forces_essential_true(self, mock_supabase, client, user_context):
         """Even if client sends essential=false, backend must store/return essential=true."""
         mock_client = MagicMock()
@@ -495,7 +495,7 @@ class TestPrivacyEdgeCases:
         finally:
             app.dependency_overrides.clear()
 
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_save_cookie_preferences_returns_500_on_supabase_error(self, mock_supabase, client, user_context):
         """Server should return 500 if persistence fails."""
         mock_client = MagicMock()
@@ -518,7 +518,7 @@ class TestPrivacyEdgeCases:
 
 class TestAccountDeletionEdgeCases:
 
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_cancel_account_deletion_404_when_not_found(self, mock_supabase, client, user_context):
         """Cancel should 404 if request is missing/already processed."""
         mock_client = MagicMock()

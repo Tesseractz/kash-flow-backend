@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.deps import get_current_context, RequestContext
+from app.api.deps import get_current_context, RequestContext
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def client():
 
 
 class TestPushVapidKey:
-    @patch("app.main.get_vapid_public_key")
+    @patch("app.services.push.get_vapid_public_key")
     def test_vapid_key_503_when_missing(self, mock_key, client, user_context):
         mock_key.return_value = None
         app.dependency_overrides[get_current_context] = lambda: user_context
@@ -33,7 +33,7 @@ class TestPushVapidKey:
         finally:
             app.dependency_overrides.clear()
 
-    @patch("app.main.get_vapid_public_key")
+    @patch("app.services.push.get_vapid_public_key")
     def test_vapid_key_200_when_present(self, mock_key, client, user_context):
         mock_key.return_value = "PUBLICKEY"
         app.dependency_overrides[get_current_context] = lambda: user_context
@@ -46,7 +46,7 @@ class TestPushVapidKey:
 
 
 class TestPushSubscribe:
-    @patch("app.main.get_supabase_client")
+    @patch("app.db.supabase.get_supabase_client")
     def test_subscribe_upserts_row(self, mock_supa, client, user_context):
         supa = MagicMock()
         q = MagicMock()
@@ -69,8 +69,8 @@ class TestPushSubscribe:
 
 
 class TestPushTest:
-    @patch("app.main.send_web_push")
-    @patch("app.main.get_supabase_client")
+    @patch("app.services.push.send_web_push")
+    @patch("app.db.supabase.get_supabase_client")
     def test_push_test_returns_no_subs(self, mock_supa, mock_send, client, user_context):
         supa = MagicMock()
         q = MagicMock()
@@ -89,8 +89,8 @@ class TestPushTest:
         finally:
             app.dependency_overrides.clear()
 
-    @patch("app.main.send_web_push")
-    @patch("app.main.get_supabase_client")
+    @patch("app.services.push.send_web_push")
+    @patch("app.db.supabase.get_supabase_client")
     def test_push_test_sends_when_subs_exist(self, mock_supa, mock_send, client, user_context):
         supa = MagicMock()
         q = MagicMock()

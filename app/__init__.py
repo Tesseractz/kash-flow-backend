@@ -1,0 +1,1 @@
+"""KashPoint FastAPI application package."""

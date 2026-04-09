@@ -22,7 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["SUPABASE_URL"] = "https://test.supabase.co"
 os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-service-role-key"
 os.environ["SUPABASE_JWT_SECRET"] = "test-jwt-secret-key-for-testing-only"
-os.environ["STRIPE_SECRET_KEY"] = "sk_test_fake"
+os.environ["PAYSTACK_SECRET_KEY_TEST"] = "sk_test_fake_paystack"
+os.environ["PAYSTACK_MODE"] = "test"
 os.environ["PASSWORD_ENCRYPTION_KEY"] = "dGVzdC1lbmNyeXB0aW9uLWtleS0xMjM0NTY3ODkw"
 
 
@@ -104,8 +105,9 @@ def sample_subscription_free():
         "plan": "free",
         "status": "active",
         "trial_end": None,
-        "stripe_customer_id": None,
-        "stripe_subscription_id": None
+        "billing_provider": "paystack",
+        "paystack_customer_code": None,
+        "paystack_subscription_code": None,
     }
 
 
@@ -117,8 +119,9 @@ def sample_subscription_pro():
         "plan": "pro",
         "status": "active",
         "trial_end": None,
-        "stripe_customer_id": "cus_test123",
-        "stripe_subscription_id": "sub_test123"
+        "billing_provider": "paystack",
+        "paystack_customer_code": "CUS_test123",
+        "paystack_subscription_code": "SUB_test123",
     }
 
 
@@ -131,8 +134,9 @@ def sample_subscription_trial():
         "plan": "pro",
         "status": "trialing",
         "trial_end": trial_end.isoformat(),
-        "stripe_customer_id": "cus_test123",
-        "stripe_subscription_id": "sub_test123"
+        "billing_provider": "paystack",
+        "paystack_customer_code": "CUS_test123",
+        "paystack_subscription_code": "SUB_test123",
     }
 
 
@@ -145,21 +149,23 @@ def sample_subscription_expired_trial():
         "plan": "pro",
         "status": "trialing",
         "trial_end": trial_end.isoformat(),
-        "stripe_customer_id": "cus_test123",
-        "stripe_subscription_id": "sub_test123"
+        "billing_provider": "paystack",
+        "paystack_customer_code": "CUS_test123",
+        "paystack_subscription_code": "SUB_test123",
     }
 
 
 @pytest.fixture
 def sample_subscription_business():
-    """Sample business plan subscription."""
+    """Sample business plan subscription (mapped to pro)."""
     return {
         "store_id": "test-store-id",
         "plan": "business",
         "status": "active",
         "trial_end": None,
-        "stripe_customer_id": "cus_test456",
-        "stripe_subscription_id": "sub_test456"
+        "billing_provider": "paystack",
+        "paystack_customer_code": "CUS_test456",
+        "paystack_subscription_code": "SUB_test456",
     }
 
 
@@ -207,7 +213,7 @@ def mock_supabase():
 @pytest.fixture
 def mock_request_context():
     """Create a mock request context."""
-    from app.deps import RequestContext
+    from app.api.deps import RequestContext
     return RequestContext(
         user_id="test-user-id",
         store_id="test-store-id",
@@ -218,7 +224,7 @@ def mock_request_context():
 @pytest.fixture
 def mock_request_context_cashier():
     """Create a mock request context for cashier."""
-    from app.deps import RequestContext
+    from app.api.deps import RequestContext
     return RequestContext(
         user_id="test-cashier-id",
         store_id="test-store-id",
