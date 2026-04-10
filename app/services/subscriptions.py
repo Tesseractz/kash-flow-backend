@@ -102,6 +102,10 @@ def get_store_plan(store_id: str) -> PlanLimits:
         plan = data.get("plan", "expired")
         status = data.get("status", "expired")
         trial_end = data.get("trial_end")
+        # One trial per store: if already consumed, do not grant in-app trial perks even if Paystack sends trialing again.
+        if data.get("trial_consumed_at") and status == "trialing":
+            status = "active"
+            trial_end = None
 
         return PlanLimits(plan, status=status, trial_end=trial_end)
     except Exception:
@@ -139,6 +143,7 @@ def get_plan_info(store_id: str) -> dict:
         "is_on_trial": limits.is_on_trial,
         "trial_end": sub_data.get("trial_end"),
         "current_period_end": sub_data.get("current_period_end"),
+        "trial_consumed": bool(sub_data.get("trial_consumed_at")),
         "has_paystack_subscription": bool(sub_data.get("paystack_subscription_code")),
         "billing_provider": sub_data.get("billing_provider"),
         "limits": {

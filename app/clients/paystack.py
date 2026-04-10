@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import os
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
@@ -37,6 +37,11 @@ def get_paystack_plan_code() -> str:
     return _get("PLAN_CODE")
 
 
+def get_paystack_plan_code_no_trial() -> str:
+    """Plan without trial — used after this store has used its one-month trial."""
+    return _get("PLAN_CODE_NO_TRIAL")
+
+
 def verify_paystack_signature(raw_body: bytes, signature: Optional[str]) -> bool:
     secret = get_paystack_secret_key()
     if not secret or not signature:
@@ -45,17 +50,25 @@ def verify_paystack_signature(raw_body: bytes, signature: Optional[str]) -> bool
     return hmac.compare_digest(digest, signature)
 
 
-def initialize_transaction(*, email: str, amount_kobo: int, callback_url: str, metadata: dict) -> str:
+def initialize_transaction(
+    *,
+    email: str,
+    amount_kobo: int,
+    callback_url: str,
+    metadata: dict,
+    plan_code: Optional[str] = None,
+) -> str:
     """
     Create a Paystack hosted payment page (transaction initialize).
     Returns authorization_url.
+    plan_code: override Paystack plan (e.g. no-trial plan after trial was consumed).
     """
     secret = get_paystack_secret_key()
     if not secret:
         raise Exception("Missing PAYSTACK_SECRET_KEY")
 
-    plan_code = get_paystack_plan_code()
-    if not plan_code:
+    pc = (plan_code or "").strip() or get_paystack_plan_code()
+    if not pc:
         raise Exception("Missing PAYSTACK_PLAN_CODE")
 
     resp = httpx.post(
@@ -67,7 +80,7 @@ def initialize_transaction(*, email: str, amount_kobo: int, callback_url: str, m
         json={
             "email": email,
             "amount": int(amount_kobo),
-            "plan": plan_code,
+            "plan": pc,
             "callback_url": callback_url,
             "metadata": metadata,
         },
@@ -102,6 +115,25 @@ def verify_transaction(*, reference: str) -> dict:
     return data.get("data") or {}
 
 
+def fetch_subscription_by_code(subscription_code: str) -> Dict[str, Any]:
+    """
+    GET /subscription/:code — includes next_payment_date for the billing UI.
+    """
+    secret = get_paystack_secret_key()
+    if not secret or not subscription_code:
+        return {}
+    code = subscription_code.strip()
+    resp = httpx.get(
+        f"https://api.paystack.co/subscription/{code}",
+        headers={"Authorization": f"Bearer {secret}"},
+        timeout=15.0,
+    )
+    data = resp.json() if resp.content else {}
+    if resp.status_code >= 400 or not data.get("status"):
+        return {}
+    return data.get("data") or {}
+
+
 def list_customer_subscriptions(*, customer_code: str) -> list:
     """
     Fetch all subscriptions for a Paystack customer.
@@ -127,32 +159,35 @@ def list_customer_subscriptions(*, customer_code: str) -> list:
 
 def find_subscription_for_customer(
     verify_data: dict, customer_code: Optional[str]
-) -> Tuple[Optional[str], Optional[str]]:
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Extract subscription_code + email_token from a verify-transaction response,
-    falling back to the Subscriptions List API when the verify response omits them.
-    Returns (subscription_code, email_token) or (None, None).
+    Extract subscription_code + email_token + next_payment_date (ISO) from verify response
+    or Paystack subscription APIs. next_payment_date powers current_period_end in our DB.
     """
     sub_code = verify_data.get("subscription_code")
     email_tok = verify_data.get("email_token")
+    next_pay: Optional[str] = None
 
     sub_obj = verify_data.get("subscription") or {}
-    if isinstance(sub_obj, dict) and not sub_code:
-        sub_code = sub_obj.get("subscription_code") or sub_code
-        email_tok = sub_obj.get("email_token") or email_tok
+    if isinstance(sub_obj, dict):
+        if not sub_code:
+            sub_code = sub_obj.get("subscription_code") or sub_code
+        if not email_tok:
+            email_tok = sub_obj.get("email_token") or email_tok
+        next_pay = sub_obj.get("next_payment_date") or next_pay
 
     if sub_code:
-        print("[Paystack] Found subscription in verify response")
-        return sub_code, email_tok
+        if not next_pay:
+            details = fetch_subscription_by_code(sub_code)
+            if details:
+                next_pay = details.get("next_payment_date")
+        return sub_code, email_tok, next_pay
 
     if not customer_code:
-        print("[Paystack] No sub_code in verify and no customer_code to look up")
-        return None, None
+        return None, None, None
 
-    print(f"[Paystack] No sub_code in verify response, listing subscriptions for {customer_code}")
     try:
         subs = list_customer_subscriptions(customer_code=customer_code)
-        print(f"[Paystack] Found {len(subs)} subscription(s) for customer")
         target_plan = get_paystack_plan_code()
         for s in subs:
             s_status = s.get("status", "")
@@ -160,23 +195,22 @@ def find_subscription_for_customer(
             s_plan_code = s_plan.get("plan_code") if isinstance(s_plan, dict) else None
             sc = s.get("subscription_code")
             et = s.get("email_token")
-            print(f"[Paystack]   sub={sc}, plan={s_plan_code}, status={s_status}")
+            npd = s.get("next_payment_date")
             if s_status in ("active", "non-renewing", "attention"):
                 if s_plan_code == target_plan or not target_plan:
                     if sc:
-                        print("[Paystack]   -> matched!")
-                        return sc, et
+                        return sc, et, npd
         if subs:
             first = subs[0]
             sc = first.get("subscription_code")
             et = first.get("email_token")
+            npd = first.get("next_payment_date")
             if sc:
-                print("[Paystack]   -> using first available subscription as fallback")
-                return sc, et
-    except Exception as exc:
-        print(f"[Paystack] Error fetching subscriptions: {exc}")
+                return sc, et, npd
+    except Exception:
+        pass
 
-    return None, None
+    return None, None, None
 
 
 def disable_subscription(*, subscription_code: str, email_token: str) -> None:

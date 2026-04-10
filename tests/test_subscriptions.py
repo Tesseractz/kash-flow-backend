@@ -256,7 +256,42 @@ class TestGetStorePlan:
             assert limits.plan == "pro"
             assert limits.status == "active"
             assert limits.is_active == True
-    
+
+    def test_get_store_plan_maps_trialing_to_active_when_trial_already_consumed(self):
+        """Paystack may still send trialing after resubscribe; app must not grant a second trial."""
+        os.environ.pop("DEV_PLAN_OVERRIDE", None)
+        os.environ["DEV_PLAN_OVERRIDE"] = ""
+
+        import importlib
+        import app.services.subscriptions
+
+        importlib.reload(app.services.subscriptions)
+
+        with patch("app.services.subscriptions.get_supabase_client") as mock_get_supabase:
+            from app.services.subscriptions import get_store_plan
+            from datetime import datetime, timedelta, timezone
+
+            trial_end = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+            mock_supabase = MagicMock()
+            mock_query = MagicMock()
+            mock_query.execute.return_value.data = {
+                "plan": "pro",
+                "status": "trialing",
+                "trial_end": trial_end,
+                "trial_consumed_at": "2026-01-01T00:00:00Z",
+            }
+            mock_query.select.return_value = mock_query
+            mock_query.eq.return_value = mock_query
+            mock_query.single.return_value = mock_query
+            mock_supabase.table.return_value = mock_query
+            mock_get_supabase.return_value = mock_supabase
+
+            limits = get_store_plan("test-store-id")
+
+            assert limits.status == "active"
+            assert limits.is_on_trial is False
+            assert limits.is_active is True
+
     def test_get_store_plan_returns_expired_on_error(self):
         """Test get_store_plan returns expired plan on database error."""
         # Ensure DEV_PLAN_OVERRIDE is not set for this test
@@ -326,7 +361,8 @@ class TestGetPlanInfo:
         mock_sub_query.execute.return_value.data = {
             "trial_end": None,
             "current_period_end": "2026-03-09T00:00:00Z",
-            "paystack_subscription_code": "SUB_test123"
+            "trial_consumed_at": None,
+            "paystack_subscription_code": "SUB_test123",
         }
         mock_sub_query.select.return_value = mock_sub_query
         mock_sub_query.eq.return_value = mock_sub_query
@@ -351,3 +387,4 @@ class TestGetPlanInfo:
         assert "usage" in info
         assert info["usage"]["products"] == 2
         assert info["limits"]["csv_export"] == True
+        assert info["trial_consumed"] is False

@@ -35,17 +35,41 @@ def test_paystack_checkout_requires_email(mock_init_tx, mock_supa, client):
     assert "email" in resp.json()["detail"].lower()
 
 
+def _subscription_select_chain_mock(trial_consumed_at=None):
+    exec_result = MagicMock(data={"trial_consumed_at": trial_consumed_at})
+    chain = MagicMock()
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.single.return_value = chain
+    chain.execute.return_value = exec_result
+    return chain
+
+
 @patch("app.db.supabase.get_supabase_client")
 @patch("app.clients.paystack.initialize_transaction")
 def test_paystack_checkout_returns_authorization_url(mock_init_tx, mock_supa, client, monkeypatch):
     monkeypatch.setenv("BILLING_PROVIDER", "paystack")
-    mock_supa.return_value = MagicMock()
+    mock_supa.return_value.table.return_value = _subscription_select_chain_mock(None)
     mock_init_tx.return_value = "https://checkout.paystack.com/abc"
 
     resp = client.post("/billing/checkout", json={"plan": "pro", "email": "a@b.com"})
     assert resp.status_code == 200
     assert resp.json()["url"].startswith("https://")
     mock_init_tx.assert_called_once()
+    assert mock_init_tx.call_args.kwargs.get("plan_code") in (None, "")
+
+
+@patch("app.db.supabase.get_supabase_client")
+@patch("app.clients.paystack.initialize_transaction")
+def test_paystack_checkout_uses_no_trial_plan_when_trial_already_consumed(mock_init_tx, mock_supa, client, monkeypatch):
+    monkeypatch.setenv("BILLING_PROVIDER", "paystack")
+    monkeypatch.setenv("PAYSTACK_PLAN_CODE_NO_TRIAL_TEST", "PLAN_NO_TRIAL_X")
+    mock_supa.return_value.table.return_value = _subscription_select_chain_mock("2026-01-01T00:00:00Z")
+    mock_init_tx.return_value = "https://checkout.paystack.com/abc"
+
+    resp = client.post("/billing/checkout", json={"plan": "pro", "email": "a@b.com"})
+    assert resp.status_code == 200
+    assert mock_init_tx.call_args.kwargs["plan_code"] == "PLAN_NO_TRIAL_X"
 
 
 @patch("app.core.http_config.allowed_origins", ["*"])
@@ -55,7 +79,7 @@ def test_paystack_checkout_callback_prefers_browser_origin(mock_init_tx, mock_su
     """When FRONTEND_URL is wrong, Origin from the SPA should set Paystack callback_url."""
     monkeypatch.setenv("BILLING_PROVIDER", "paystack")
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:5001")
-    mock_supa.return_value = MagicMock()
+    mock_supa.return_value.table.return_value = _subscription_select_chain_mock(None)
     mock_init_tx.return_value = "https://checkout.paystack.com/abc"
 
     resp = client.post(
@@ -78,7 +102,7 @@ def test_paystack_checkout_callback_uses_spa_port_when_cors_lists_other_loopback
     """Explicit CORS for :5001 must not force Paystack redirect to :5001 when the SPA is on :5000."""
     monkeypatch.setenv("BILLING_PROVIDER", "paystack")
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:5001")
-    mock_supa.return_value = MagicMock()
+    mock_supa.return_value.table.return_value = _subscription_select_chain_mock(None)
     mock_init_tx.return_value = "https://checkout.paystack.com/abc"
 
     resp = client.post(
@@ -149,6 +173,41 @@ def test_paystack_webhook_charge_success_upserts_subscription(mock_supa, client,
     subs_table = mock_client.table.return_value
     upsert_calls = [c for c in subs_table.upsert.call_args_list]
     assert any((c.args and c.args[0].get("status") == "active") for c in upsert_calls)
+
+
+@patch("app.clients.paystack.fetch_subscription_by_code")
+@patch("app.clients.paystack.verify_transaction")
+@patch("app.db.supabase.get_supabase_client")
+def test_paystack_sync_sets_current_period_end_from_paystack(
+    mock_supa, mock_verify, mock_fetch, client, monkeypatch
+):
+    """Resubscribe should refresh next billing date from Paystack (not keep an old DB value)."""
+    monkeypatch.setenv("BILLING_PROVIDER", "paystack")
+    monkeypatch.setenv("PAYSTACK_MODE", "test")
+    store = str(uuid.uuid4())
+    mock_verify.return_value = {
+        "status": "success",
+        "metadata": {"store_id": store, "plan": "pro"},
+        "subscription_code": "SUB_x",
+        "email_token": "EMT_x",
+        "customer": {"customer_code": "CUS_x"},
+    }
+    mock_fetch.return_value = {"next_payment_date": "2026-05-01T00:00:00.000Z"}
+    mock_table = MagicMock()
+    mock_table.select.return_value = _subscription_select_chain_mock(None)
+    mock_table.upsert.return_value = MagicMock(execute=MagicMock())
+    mock_supa.return_value.table.return_value = mock_table
+
+    app.dependency_overrides[get_current_context] = lambda: RequestContext(
+        user_id="u1", store_id=store, role="admin"
+    )
+    try:
+        resp = client.post("/billing/paystack/sync", json={"reference": "ref_123"})
+        assert resp.status_code == 200, resp.text
+        upserted = mock_table.upsert.call_args[0][0]
+        assert upserted.get("current_period_end") == "2026-05-01T00:00:00.000Z"
+    finally:
+        app.dependency_overrides.clear()
 
 
 @patch("app.clients.paystack.verify_transaction")

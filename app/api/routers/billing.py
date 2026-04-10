@@ -25,6 +25,35 @@ class PaystackSyncRequest(BaseModel):
     reference: str
 
 
+def _ensure_trial_consumed_once(supa, store_id, update: dict) -> None:
+    """First successful Paystack payment/subscription for this store consumes the one-time trial."""
+    try:
+        r = supa.table("subscriptions").select("trial_consumed_at").eq("store_id", store_id).single().execute()
+        data = getattr(r, "data", None) or {}
+        if isinstance(data, dict) and data.get("trial_consumed_at"):
+            return
+    except Exception:
+        pass
+    update["trial_consumed_at"] = now_utc_iso()
+
+
+def _webhook_next_payment_iso(data: dict) -> Optional[str]:
+    """Paystack next charge date for subscription webhooks / charge.success payloads."""
+    sub = data.get("subscription")
+    if isinstance(sub, dict) and sub.get("next_payment_date"):
+        return sub.get("next_payment_date")
+    if data.get("next_payment_date"):
+        return data.get("next_payment_date")
+    sc = data.get("subscription_code")
+    if isinstance(sub, dict):
+        sc = sc or sub.get("subscription_code")
+    if sc:
+        details = paystack_client.fetch_subscription_by_code(sc)
+        if details:
+            return details.get("next_payment_date")
+    return None
+
+
 @router.get("/billing")
 def redirect_paystack_return_to_spa(request: Request):
     q = request.url.query
@@ -49,11 +78,13 @@ def redirect_paystack_return_to_spa(request: Request):
 
 @router.get("/billing/config")
 def get_billing_config():
+    no_trial = (paystack_client.get_paystack_plan_code_no_trial() or "").strip()
     return {
         "provider": "paystack",
         "paystack": {
             "public_key": paystack_client.get_paystack_public_key(),
             "plan_code": paystack_client.get_paystack_plan_code(),
+            "plan_code_no_trial_configured": bool(no_trial),
             "currency": "ZAR",
         },
     }
@@ -72,6 +103,27 @@ def create_checkout_session(
     if not email:
         raise HTTPException(status_code=400, detail="Missing email for Paystack checkout")
 
+    supa = supabase_client.get_supabase_client()
+    trial_consumed = False
+    try:
+        sub_row = supa.table("subscriptions").select("trial_consumed_at").eq("store_id", ctx.store_id).single().execute()
+        data = getattr(sub_row, "data", None) or {}
+        if isinstance(data, dict):
+            trial_consumed = bool(data.get("trial_consumed_at"))
+    except Exception:
+        trial_consumed = False
+
+    plan_code: Optional[str] = None
+    if trial_consumed:
+        nt = (paystack_client.get_paystack_plan_code_no_trial() or "").strip()
+        if not nt:
+            raise HTTPException(
+                status_code=400,
+                detail="This store has already used its one-time trial. Add PAYSTACK_PLAN_CODE_NO_TRIAL "
+                "(duplicate of your Pro plan without a trial period) to the server environment.",
+            )
+        plan_code = nt
+
     frontend_url = resolve_frontend_base_url(request)
     callback_url = f"{frontend_url}/billing?success=1"
     amount_kobo = 25000
@@ -81,9 +133,8 @@ def create_checkout_session(
         amount_kobo=amount_kobo,
         callback_url=callback_url,
         metadata={"store_id": str(ctx.store_id), "plan": body.plan},
+        plan_code=plan_code,
     )
-
-    supa = supabase_client.get_supabase_client()
     try:
         supa.table("subscriptions").upsert(
             {
@@ -104,15 +155,11 @@ def paystack_sync_after_checkout(body: PaystackSyncRequest, ctx: RequestContext 
     try:
         pdata = paystack_client.verify_transaction(reference=body.reference)
     except Exception as e:
-        print(f"[Paystack Sync] verify_transaction failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
-    print(f"[Paystack Sync] Verify response status={pdata.get('status')}, keys={list(pdata.keys())}")
 
     meta = pdata.get("metadata") or {}
     store_id = meta.get("store_id")
     if not store_id or str(store_id) != str(ctx.store_id):
-        print(f"[Paystack Sync] store_id mismatch: meta={store_id}, ctx={ctx.store_id}")
         raise HTTPException(status_code=403, detail="This payment does not belong to your store.")
 
     plan = meta.get("plan") or "pro"
@@ -127,7 +174,7 @@ def paystack_sync_after_checkout(body: PaystackSyncRequest, ctx: RequestContext 
     if isinstance(cust, dict):
         cust_code = cust.get("customer_code")
 
-    sub_code, email_tok = paystack_client.find_subscription_for_customer(pdata, cust_code)
+    sub_code, email_tok, next_payment_iso = paystack_client.find_subscription_for_customer(pdata, cust_code)
 
     update = {
         "store_id": ctx.store_id,
@@ -141,10 +188,12 @@ def paystack_sync_after_checkout(body: PaystackSyncRequest, ctx: RequestContext 
         update["paystack_subscription_code"] = sub_code
     if email_tok:
         update["paystack_email_token"] = email_tok
-
-    print(f"[Paystack Sync] Upserting: plan={plan}, sub_code={bool(sub_code)}, cust_code={bool(cust_code)}")
+    # Replace stale period end (e.g. after cancel + resubscribe) with Paystack's next charge date.
+    if sub_code:
+        update["current_period_end"] = next_payment_iso
 
     supa = supabase_client.get_supabase_client()
+    _ensure_trial_consumed_once(supa, ctx.store_id, update)
     supa.table("subscriptions").upsert(update).execute()
     return {"synced": True, "has_subscription": bool(sub_code)}
 
@@ -167,14 +216,14 @@ def cancel_subscription(ctx: RequestContext = Depends(get_current_context)):
     # If the user is on a trial (no Paystack subscription yet), allow canceling locally.
     status = (sub.get("status") or "").lower()
     if status == "trialing" and not sub.get("paystack_subscription_code"):
-        supa.table("subscriptions").upsert(
+        supa.table("subscriptions").update(
             {
-                "store_id": ctx.store_id,
                 "billing_provider": "paystack",
                 "status": "canceled",
                 "plan": "expired",
+                "current_period_end": None,
             }
-        ).execute()
+        ).eq("store_id", ctx.store_id).execute()
         return {"canceled": True, "note": "Trial canceled locally (no Paystack subscription to disable)."}
 
     code = sub.get("paystack_subscription_code")
@@ -183,8 +232,7 @@ def cancel_subscription(ctx: RequestContext = Depends(get_current_context)):
     if not code or not token:
         cust_code = sub.get("paystack_customer_code")
         if cust_code:
-            print(f"[Paystack Cancel] No sub_code in DB, looking up from Paystack for {cust_code}")
-            found_code, found_token = paystack_client.find_subscription_for_customer({}, cust_code)
+            found_code, found_token, _ = paystack_client.find_subscription_for_customer({}, cust_code)
             if found_code and found_token:
                 code, token = found_code, found_token
                 supa.table("subscriptions").update(
@@ -194,14 +242,14 @@ def cancel_subscription(ctx: RequestContext = Depends(get_current_context)):
     if not code or not token:
         # We don't have enough Paystack identifiers to disable billing via API.
         # Still allow the user to cancel access locally so the app state is consistent.
-        supa.table("subscriptions").upsert(
+        supa.table("subscriptions").update(
             {
-                "store_id": ctx.store_id,
                 "billing_provider": "paystack",
                 "status": "canceled",
                 "plan": "expired",
+                "current_period_end": None,
             }
-        ).execute()
+        ).eq("store_id", ctx.store_id).execute()
         return {
             "canceled": True,
             "warning": "No Paystack subscription identifiers found for this store. Your plan was canceled in-app, but if Paystack is billing you, you must cancel from your Paystack dashboard or Paystack subscription emails.",
@@ -212,14 +260,14 @@ def cancel_subscription(ctx: RequestContext = Depends(get_current_context)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    supa.table("subscriptions").upsert(
+    supa.table("subscriptions").update(
         {
-            "store_id": ctx.store_id,
             "billing_provider": "paystack",
             "status": "canceled",
             "plan": "expired",
+            "current_period_end": None,
         }
-    ).execute()
+    ).eq("store_id", ctx.store_id).execute()
     return {"canceled": True}
 
 
@@ -296,32 +344,44 @@ async def paystack_webhook(request: Request):
             update["paystack_subscription_code"] = sub_code
         if email_tok:
             update["paystack_email_token"] = email_tok
+        if update.get("paystack_subscription_code"):
+            update["current_period_end"] = _webhook_next_payment_iso(data)
+        _ensure_trial_consumed_once(supa, store_id, update)
         supa.table("subscriptions").upsert(update).execute()
 
     elif event_type in ("subscription.create", "subscription.enable"):
         update["status"] = "active"
         update["paystack_subscription_code"] = data.get("subscription_code")
         update["paystack_email_token"] = data.get("email_token")
+        npd = data.get("next_payment_date")
+        if not npd and isinstance(data.get("subscription"), dict):
+            npd = data["subscription"].get("next_payment_date")
+        sc = update.get("paystack_subscription_code")
+        if sc and not npd:
+            details = paystack_client.fetch_subscription_by_code(sc)
+            npd = details.get("next_payment_date") if details else None
+        if sc:
+            update["current_period_end"] = npd
+        _ensure_trial_consumed_once(supa, store_id, update)
         supa.table("subscriptions").upsert(update).execute()
 
     elif event_type in ("subscription.disable", "subscription.not_renew"):
-        supa.table("subscriptions").upsert(
+        supa.table("subscriptions").update(
             {
-                "store_id": store_id,
                 "billing_provider": "paystack",
                 "status": "canceled",
                 "plan": "expired",
+                "current_period_end": None,
             }
-        ).execute()
+        ).eq("store_id", store_id).execute()
 
     elif event_type in ("invoice.payment_failed",):
-        supa.table("subscriptions").upsert(
+        supa.table("subscriptions").update(
             {
-                "store_id": store_id,
                 "billing_provider": "paystack",
                 "status": "past_due",
                 "plan": update["plan"],
             }
-        ).execute()
+        ).eq("store_id", store_id).execute()
 
     return {"received": True}
