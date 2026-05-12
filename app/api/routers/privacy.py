@@ -1,8 +1,10 @@
+import os
 from datetime import datetime, timedelta, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+import app.services.account_deletion as account_deletion
 import app.services.audit_log as audit_log
 import app.db.supabase as supabase_client
 from app.api.deps import RequestContext, get_current_context
@@ -187,8 +189,28 @@ def get_data_export_requests(ctx: RequestContext = Depends(get_current_context))
     return res.data or []
 
 
+@router.get("/privacy/delete-account", response_model=List[AccountDeletionRequest])
+def list_account_deletion_requests(ctx: RequestContext = Depends(get_current_context)):
+    """Return this user's deletion requests, most recent first."""
+    supabase = supabase_client.get_supabase_client()
+    try:
+        res = (
+            supabase.table("account_deletion_requests")
+            .select("*")
+            .eq("user_id", ctx.user_id)
+            .order("requested_at", desc=True)
+            .execute()
+        )
+        return res.data or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/privacy/delete-account", response_model=AccountDeletionRequest, status_code=201)
 def request_account_deletion(request_data: AccountDeletionCreate, ctx: RequestContext = Depends(get_current_context)):
+    if not account_deletion.verify_user_password(ctx.user_id, request_data.confirm_password):
+        raise HTTPException(status_code=401, detail="Password is incorrect")
+
     supabase = supabase_client.get_supabase_client()
 
     pending = (
@@ -223,6 +245,51 @@ def request_account_deletion(request_data: AccountDeletionCreate, ctx: RequestCo
         return res.data[0]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/privacy/delete-account/execute", status_code=200)
+def execute_account_deletion(
+    request_data: AccountDeletionCreate,
+    ctx: RequestContext = Depends(get_current_context),
+):
+    """Delete the account *now*, skipping the 30-day grace period.
+
+    Requires the user to re-enter their password. After this call returns,
+    the access token is no longer valid for refresh — the frontend should
+    immediately sign the user out.
+    """
+    if not account_deletion.verify_user_password(ctx.user_id, request_data.confirm_password):
+        raise HTTPException(status_code=401, detail="Password is incorrect")
+
+    audit_log.log_audit_event(
+        ctx.store_id, ctx.user_id, "execute", "account_deletion", ctx.user_id,
+        "Immediate account deletion requested",
+    )
+
+    result = account_deletion.delete_user_and_owned_data(ctx.user_id)
+    if not result.get("auth_user_deleted"):
+        raise HTTPException(
+            status_code=500,
+            detail="Account data removed but auth user delete failed; contact support.",
+        )
+    return {"deleted": True, "store_deleted": result.get("store_deleted", False)}
+
+
+@router.post("/privacy/scheduled-deletions/process")
+def process_scheduled_deletions_endpoint(x_cron_secret: str = Header(default=None)):
+    """Process every deletion request whose 30-day grace period has elapsed.
+
+    Intended for a scheduler (Supabase cron, Render Cron, GitHub Action, etc.).
+    Set CRON_SECRET in the backend env, then call this endpoint daily with
+    header `X-Cron-Secret: <same value>`. If the secret isn't configured this
+    endpoint always 404s so it can't be hit by accident.
+    """
+    expected = os.getenv("CRON_SECRET")
+    if not expected:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not x_cron_secret or x_cron_secret != expected:
+        raise HTTPException(status_code=401, detail="Invalid cron secret")
+    return account_deletion.process_scheduled_deletions()
 
 
 @router.delete("/privacy/delete-account/{request_id}", status_code=204)

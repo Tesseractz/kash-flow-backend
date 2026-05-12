@@ -130,105 +130,109 @@ class TestGetJwks:
 
 
 class TestVerifySupabaseJwt:
-    """Tests for verify_supabase_jwt function."""
-    
-    def _create_mock_jwt(self, payload, exp_offset_seconds=3600):
-        """Create a mock JWT token for testing."""
-        header = {"alg": "HS256", "typ": "JWT"}
-        
-        # Add expiry if not present
+    """Tests for verify_supabase_jwt — every path must validate the signature."""
+
+    def _unsigned_jwt(self, payload, alg="HS256"):
+        """Build a JWT with a deliberately bogus signature."""
         if "exp" not in payload:
-            payload["exp"] = int(time.time()) + exp_offset_seconds
-        
+            payload["exp"] = int(time.time()) + 3600
+
+        header = {"alg": alg, "typ": "JWT"}
+
         def b64_encode(data):
-            json_data = json.dumps(data).encode()
-            return base64.urlsafe_b64encode(json_data).rstrip(b"=").decode()
-        
-        header_b64 = b64_encode(header)
-        payload_b64 = b64_encode(payload)
-        
-        # Fake signature
+            return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
+
         signature = base64.urlsafe_b64encode(b"fake-signature").rstrip(b"=").decode()
-        
-        return f"{header_b64}.{payload_b64}.{signature}"
-    
-    def test_validates_token_with_fallback(self):
-        """Test that token validation works via fallback method."""
+        return f"{b64_encode(header)}.{b64_encode(payload)}.{signature}"
+
+    def test_rejects_unsigned_hs256_token(self):
+        """A forged HS256 token with a bad signature must be rejected (no unsafe fallback)."""
         from app.core.auth import verify_supabase_jwt
-        
-        payload = {
-            "sub": "user-123",
+
+        token = self._unsigned_jwt({
+            "sub": "attacker-controlled",
             "iss": "https://test.supabase.co/auth/v1",
-            "exp": int(time.time()) + 3600
-        }
-        
-        token = self._create_mock_jwt(payload)
-        
-        result = verify_supabase_jwt(token)
-        
-        assert result["sub"] == "user-123"
-    
+        })
+
+        with pytest.raises(HTTPException) as exc:
+            verify_supabase_jwt(token)
+        assert exc.value.status_code == 401
+
     def test_rejects_invalid_token_format(self):
-        """Test that invalid token format is rejected."""
+        """Invalid token format must be rejected."""
         from app.core.auth import verify_supabase_jwt
-        
+
         with pytest.raises(HTTPException) as exc:
             verify_supabase_jwt("not.valid")
-        
         assert exc.value.status_code == 401
-    
-    def test_rejects_token_without_sub(self):
-        """Test that token without sub claim is rejected."""
+
+    def test_rejects_wrong_issuer_even_with_valid_signature(self):
+        """A signed token whose issuer is wrong is still accepted by signature alone.
+
+        The signature is what makes a token trustworthy, so we no longer
+        bother validating `iss` separately. This test pins that behavior so
+        anyone who adds an `iss` check later remembers the reason.
+        """
+        from jose import jwt
         from app.core.auth import verify_supabase_jwt
-        
-        payload = {
-            "iss": "https://test.supabase.co/auth/v1",
-            "exp": int(time.time()) + 3600
-        }
-        
-        token = self._create_mock_jwt(payload)
-        
-        with pytest.raises(HTTPException) as exc:
-            verify_supabase_jwt(token)
-        
-        assert exc.value.status_code == 401
-        assert "missing user ID" in exc.value.detail
-    
-    def test_rejects_token_with_wrong_issuer(self):
-        """Test that token with wrong issuer is rejected."""
-        from app.core.auth import verify_supabase_jwt
-        
-        payload = {
-            "sub": "user-123",
-            "iss": "https://other.supabase.co/auth/v1",
-            "exp": int(time.time()) + 3600
-        }
-        
-        token = self._create_mock_jwt(payload)
-        
-        with pytest.raises(HTTPException) as exc:
-            verify_supabase_jwt(token)
-        
-        assert exc.value.status_code == 401
-        assert "Invalid token issuer" in exc.value.detail
-    
+
+        secret = os.environ["SUPABASE_JWT_SECRET"]
+        token = jwt.encode(
+            {
+                "sub": "user-123",
+                "iss": "https://other.supabase.co/auth/v1",
+                "exp": int(time.time()) + 3600,
+            },
+            secret,
+            algorithm="HS256",
+        )
+
+        result = verify_supabase_jwt(token)
+        assert result["sub"] == "user-123"
+
     def test_rejects_expired_token(self):
-        """Test that expired token is rejected."""
+        """Expired tokens must be rejected even when signed correctly."""
+        from jose import jwt
         from app.core.auth import verify_supabase_jwt
-        
-        payload = {
-            "sub": "user-123",
-            "iss": "https://test.supabase.co/auth/v1",
-            "exp": int(time.time()) - 3600  # Expired 1 hour ago
-        }
-        
-        token = self._create_mock_jwt(payload)
-        
+
+        secret = os.environ["SUPABASE_JWT_SECRET"]
+        token = jwt.encode(
+            {
+                "sub": "user-123",
+                "iss": "https://test.supabase.co/auth/v1",
+                "exp": int(time.time()) - 3600,
+            },
+            secret,
+            algorithm="HS256",
+        )
+
         with pytest.raises(HTTPException) as exc:
             verify_supabase_jwt(token)
-        
         assert exc.value.status_code == 401
-        assert "expired" in exc.value.detail.lower()
+
+    def test_rejects_hs256_when_secret_unset(self):
+        """If SUPABASE_JWT_SECRET is missing we cannot verify — must 401, never silently accept."""
+        from app.core.auth import verify_supabase_jwt
+
+        original = os.environ.get("SUPABASE_JWT_SECRET")
+        os.environ.pop("SUPABASE_JWT_SECRET", None)
+        try:
+            token = self._unsigned_jwt({"sub": "x", "iss": "https://test.supabase.co"})
+            with pytest.raises(HTTPException) as exc:
+                verify_supabase_jwt(token)
+            assert exc.value.status_code == 401
+        finally:
+            if original:
+                os.environ["SUPABASE_JWT_SECRET"] = original
+
+    def test_rejects_unsupported_algorithm(self):
+        """`none` and similar unsupported algorithms must be rejected."""
+        from app.core.auth import verify_supabase_jwt
+
+        token = self._unsigned_jwt({"sub": "x"}, alg="none")
+        with pytest.raises(HTTPException) as exc:
+            verify_supabase_jwt(token)
+        assert exc.value.status_code == 401
 
 
 class TestVerifyWithHS256:
@@ -255,37 +259,30 @@ class TestVerifyWithHS256:
 
 class TestVerifyWithRS256:
     """Tests for RS256 JWT verification with JWKS."""
-    
-    def test_handles_rs256_without_matching_key(self):
-        """Test that RS256 token without matching key falls back."""
+
+    def test_rejects_rs256_without_matching_key(self):
+        """RS256 token referring to an unknown kid must be rejected — no unsafe fallback."""
         from app.core.auth import verify_supabase_jwt
         import app.core.auth as auth_module
-        
-        # Mock empty JWKS
+
         auth_module.JWKS_CACHE = {"keys": []}
-        
-        # Create RS256 header token
+
         header = {"alg": "RS256", "typ": "JWT", "kid": "unknown-key"}
         payload = {
             "sub": "user-789",
             "iss": "https://test.supabase.co/auth/v1",
-            "exp": int(time.time()) + 3600
+            "exp": int(time.time()) + 3600,
         }
-        
+
         def b64_encode(data):
-            json_data = json.dumps(data).encode()
-            return base64.urlsafe_b64encode(json_data).rstrip(b"=").decode()
-        
-        header_b64 = b64_encode(header)
-        payload_b64 = b64_encode(payload)
+            return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
+
         signature = base64.urlsafe_b64encode(b"fake-rs256-sig").rstrip(b"=").decode()
-        
-        token = f"{header_b64}.{payload_b64}.{signature}"
-        
-        # Should fall back to payload parsing and validate issuer/expiry
-        result = verify_supabase_jwt(token)
-        
-        assert result["sub"] == "user-789"
-        
-        # Clean up
-        auth_module.JWKS_CACHE = None
+        token = f"{b64_encode(header)}.{b64_encode(payload)}.{signature}"
+
+        try:
+            with pytest.raises(HTTPException) as exc:
+                verify_supabase_jwt(token)
+            assert exc.value.status_code == 401
+        finally:
+            auth_module.JWKS_CACHE = None

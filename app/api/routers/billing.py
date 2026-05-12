@@ -26,15 +26,48 @@ class PaystackSyncRequest(BaseModel):
 
 
 def _ensure_trial_consumed_once(supa, store_id, update: dict) -> None:
-    """First successful Paystack payment/subscription for this store consumes the one-time trial."""
+    """First successful Paystack payment/subscription for this store consumes the one-time trial.
+
+    Silently no-ops if the `trial_consumed_at` column does not exist in the DB —
+    the rest of the upsert still proceeds so customers don't get a 500 mid-checkout.
+    Run backend/scripts/migrations.sql in Supabase to add the column.
+    """
     try:
         r = supa.table("subscriptions").select("trial_consumed_at").eq("store_id", store_id).single().execute()
         data = getattr(r, "data", None) or {}
         if isinstance(data, dict) and data.get("trial_consumed_at"):
             return
     except Exception:
-        pass
+        return
     update["trial_consumed_at"] = now_utc_iso()
+
+
+def _safe_subscription_upsert(supa, payload: dict) -> None:
+    """Upsert subscriptions, stripping columns Postgres reports as missing.
+
+    Postgres (via PGRST204) tells us about one missing column per error, so we
+    loop a few times — each error strips one more key and we try again. This
+    lets the app keep working on a stale schema while a deployer runs
+    migrations.sql.
+    """
+    import re
+
+    current = dict(payload)
+    for _ in range(8):  # bounded — DB has ~10 columns total; way more than enough
+        try:
+            supa.table("subscriptions").upsert(current).execute()
+            return
+        except Exception as e:
+            msg = str(e)
+            missing = set(re.findall(r"'([^']+)' column", msg))
+            if not missing:
+                raise
+            stripped = {k: v for k, v in current.items() if k not in missing}
+            if not stripped or stripped == current:
+                raise
+            current = stripped
+    # If we exhausted the retry budget, let the next attempt fail loudly.
+    supa.table("subscriptions").upsert(current).execute()
 
 
 def _webhook_next_payment_iso(data: dict) -> Optional[str]:
@@ -126,7 +159,8 @@ def create_checkout_session(
 
     frontend_url = resolve_frontend_base_url(request)
     callback_url = f"{frontend_url}/billing?success=1"
-    amount_kobo = 25000
+    # R190.00 — must match PAYSTACK_PLAN_CODE amount in your Paystack dashboard.
+    amount_kobo = 19000
 
     url = paystack_client.initialize_transaction(
         email=email,
@@ -136,12 +170,10 @@ def create_checkout_session(
         plan_code=plan_code,
     )
     try:
-        supa.table("subscriptions").upsert(
-            {
-                "store_id": ctx.store_id,
-                "billing_provider": "paystack",
-            }
-        ).execute()
+        _safe_subscription_upsert(
+            supa,
+            {"store_id": ctx.store_id, "billing_provider": "paystack"},
+        )
     except Exception:
         pass
     return {"url": url}
@@ -194,7 +226,7 @@ def paystack_sync_after_checkout(body: PaystackSyncRequest, ctx: RequestContext 
 
     supa = supabase_client.get_supabase_client()
     _ensure_trial_consumed_once(supa, ctx.store_id, update)
-    supa.table("subscriptions").upsert(update).execute()
+    _safe_subscription_upsert(supa, update)
     return {"synced": True, "has_subscription": bool(sub_code)}
 
 
@@ -347,7 +379,7 @@ async def paystack_webhook(request: Request):
         if update.get("paystack_subscription_code"):
             update["current_period_end"] = _webhook_next_payment_iso(data)
         _ensure_trial_consumed_once(supa, store_id, update)
-        supa.table("subscriptions").upsert(update).execute()
+        _safe_subscription_upsert(supa, update)
 
     elif event_type in ("subscription.create", "subscription.enable"):
         update["status"] = "active"
@@ -363,7 +395,7 @@ async def paystack_webhook(request: Request):
         if sc:
             update["current_period_end"] = npd
         _ensure_trial_consumed_once(supa, store_id, update)
-        supa.table("subscriptions").upsert(update).execute()
+        _safe_subscription_upsert(supa, update)
 
     elif event_type in ("subscription.disable", "subscription.not_renew"):
         supa.table("subscriptions").update(

@@ -281,16 +281,17 @@ class TestDataExportAPI:
 # ============================================
 class TestAccountDeletionAPI:
     
+    @patch("app.api.routers.privacy.account_deletion.verify_user_password", return_value=True)
     @patch("app.db.supabase.get_supabase_client")
     @patch("app.services.audit_log.log_audit_event")
-    def test_request_account_deletion(self, mock_audit, mock_supabase, client, user_context):
-        """User can request account deletion."""
+    def test_request_account_deletion(self, mock_audit, mock_supabase, mock_verify_pw, client, user_context):
+        """User can request account deletion when their password is correct."""
         mock_client = MagicMock()
         mock_supabase.return_value = mock_client
-        
+
         # No pending requests
         mock_client.table().select().eq().in_().execute.return_value = MagicMock(data=[])
-        
+
         request_id = str(uuid4())
         mock_client.table().insert().execute.return_value = MagicMock(data=[{
             "id": request_id,
@@ -300,7 +301,7 @@ class TestAccountDeletionAPI:
             "requested_at": datetime.now(timezone.utc).isoformat(),
             "scheduled_deletion_at": "2026-03-11T00:00:00Z"
         }])
-        
+
         app.dependency_overrides[get_current_context] = lambda: user_context
         try:
             response = client.post("/privacy/delete-account", json={
@@ -309,17 +310,38 @@ class TestAccountDeletionAPI:
             })
             assert response.status_code == 201
             assert response.json()["status"] == "pending"
+            mock_verify_pw.assert_called_once_with(user_context.user_id, "mypassword123")
         finally:
             app.dependency_overrides.clear()
-    
+
+    @patch("app.api.routers.privacy.account_deletion.verify_user_password", return_value=False)
     @patch("app.db.supabase.get_supabase_client")
-    def test_request_deletion_already_pending(self, mock_supabase, client, user_context):
+    def test_request_account_deletion_wrong_password(self, mock_supabase, mock_verify_pw, client, user_context):
+        """Wrong password must reject the deletion request and never insert a row."""
+        mock_client = MagicMock()
+        mock_supabase.return_value = mock_client
+
+        app.dependency_overrides[get_current_context] = lambda: user_context
+        try:
+            response = client.post("/privacy/delete-account", json={
+                "reason": "anything",
+                "confirm_password": "wrong-password",
+            })
+            assert response.status_code == 401
+            assert "incorrect" in response.json()["detail"].lower()
+            mock_client.table.return_value.insert.assert_not_called()
+        finally:
+            app.dependency_overrides.clear()
+
+    @patch("app.api.routers.privacy.account_deletion.verify_user_password", return_value=True)
+    @patch("app.db.supabase.get_supabase_client")
+    def test_request_deletion_already_pending(self, mock_supabase, mock_verify_pw, client, user_context):
         """Cannot request deletion if one is pending."""
         mock_client = MagicMock()
         mock_supabase.return_value = mock_client
-        
+
         mock_client.table().select().eq().in_().execute.return_value = MagicMock(data=[{"id": str(uuid4())}])
-        
+
         app.dependency_overrides[get_current_context] = lambda: user_context
         try:
             response = client.post("/privacy/delete-account", json={

@@ -38,7 +38,10 @@ def list_products(
 ):
     supabase = supabase_client.get_supabase_client()
     try:
-        query = supabase.table("products").select("*").eq("store_id", ctx.store_id)
+        paginated = bool(page and page_size)
+        select_kwargs = {"count": "exact"} if paginated else {}
+        query = supabase.table("products").select("*", **select_kwargs).eq("store_id", ctx.store_id)
+
         if q:
             conds = [f"name.ilike.%{q}%", f"sku.ilike.%{q}%"]
             if q.isdigit():
@@ -51,26 +54,18 @@ def list_products(
 
         query = query.order("id")
 
-        total = None
-        if page and page_size:
-            count_q = supabase.table("products").select("id").eq("store_id", ctx.store_id)
-            if q:
-                count_q = count_q.ilike("name", f"%{q}%")
-                if q.isdigit():
-                    count_q = count_q.or_(f"id.eq.{int(q)}")
-            if min_price is not None:
-                count_q = count_q.gte("price", min_price)
-            if max_price is not None:
-                count_q = count_q.lte("price", max_price)
-            count_res = count_q.execute()
-            total = len(count_res.data or [])
-
+        if paginated:
             start = (page - 1) * page_size
             end = start + page_size - 1
             query = query.range(start, end)
 
         res = query.execute()
-        if total is not None:
+        if paginated:
+            # PostgREST count="exact" returns the total in `.count`. Fall back to
+            # len(data) when the mock client / older driver doesn't surface it.
+            total = getattr(res, "count", None)
+            if total is None:
+                total = len(res.data or [])
             response.headers["X-Total-Count"] = str(total)
         return res.data or []
     except Exception as e:

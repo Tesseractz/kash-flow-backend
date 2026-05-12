@@ -53,84 +53,96 @@ def _get_jwks() -> Dict[str, Any]:
     return JWKS_CACHE
 
 
+_ASYMMETRIC_ALGS = ("RS256", "RS384", "RS512", "ES256", "ES384", "ES512")
+_AUTH_DEBUG = os.getenv("AUTH_DEBUG", "").strip() in ("1", "true", "yes", "on")
+
+
+def _log(msg: str) -> None:
+    if _AUTH_DEBUG:
+        print(f"[Auth] {msg}")
+
+
 def verify_supabase_jwt(token: str) -> Dict[str, Any]:
+    """Verify a Supabase access token.
+
+    Tries HS256 with `SUPABASE_JWT_SECRET` (raw and base64-decoded), then
+    falls through to JWKS-based asymmetric verification (RS256/RS384/RS512,
+    ES256/ES384/ES512 — Supabase rolled out ECC keys in late 2024).
+
+    **Never** accepts an unverified token — a forged token would otherwise be
+    granted full access to the authenticated user's store via
+    `RequestContext.store_id`.
+
+    Set AUTH_DEBUG=1 in the env to print the failure reason for each rejected
+    token (useful when debugging "every endpoint returns 401" issues).
+    """
     try:
         unverified = jwt.get_unverified_header(token)
         alg = unverified.get("alg", "HS256")
+        kid = unverified.get("kid")
+        _log(f"verifying token alg={alg} kid={kid}")
 
         jwt_secret = _get_jwt_secret()
 
-        if alg == "HS256" and jwt_secret:
+        if alg == "HS256":
+            if not jwt_secret:
+                _log("HS256 token but SUPABASE_JWT_SECRET is not set")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Server missing SUPABASE_JWT_SECRET; cannot verify HS256 token.",
+                )
             try:
-                payload = jwt.decode(
+                return jwt.decode(
                     token,
                     jwt_secret,
                     algorithms=["HS256"],
                     options={"verify_aud": False},
                 )
-                return payload
-            except JWTError:
-                pass
+            except JWTError as e:
+                _log(f"HS256 raw-secret decode failed: {e}")
 
             try:
                 decoded_secret = base64.b64decode(jwt_secret)
-                payload = jwt.decode(
+                return jwt.decode(
                     token,
                     decoded_secret,
                     algorithms=["HS256"],
                     options={"verify_aud": False},
                 )
-                return payload
-            except Exception:
-                pass
+            except (JWTError, ValueError, TypeError) as e:
+                _log(f"HS256 base64-secret decode failed: {e}")
+                raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-        if alg in ["RS256", "RS384", "RS512"]:
+        if alg in _ASYMMETRIC_ALGS:
             jwks = _get_jwks()
-            kid = unverified.get("kid")
             key = None
             for jwk in jwks.get("keys", []):
                 if jwk.get("kid") == kid:
                     key = jwk
                     break
-
-            if key:
-                payload = jwt.decode(
+            if not key:
+                available = [k.get("kid") for k in jwks.get("keys", [])]
+                _log(f"no JWKS key matched kid={kid!r}; jwks served {available}")
+                raise HTTPException(status_code=401, detail="Unknown signing key")
+            try:
+                return jwt.decode(
                     token,
                     key,
                     algorithms=[alg],
                     options={"verify_aud": False},
                 )
-                return payload
+            except JWTError as e:
+                _log(f"{alg} JWKS decode failed (kid={kid}): {e}")
+                raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-        parts = token.split(".")
-        if len(parts) != 3:
-            raise HTTPException(status_code=401, detail="Invalid token format")
-
-        payload_b64 = parts[1]
-        padding = 4 - len(payload_b64) % 4
-        if padding != 4:
-            payload_b64 += "=" * padding
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-
-        if not payload.get("sub"):
-            raise HTTPException(status_code=401, detail="Token missing user ID")
-
-        iss = payload.get("iss", "")
-        supabase_url = _get_supabase_url()
-        if supabase_url not in iss:
-            raise HTTPException(status_code=401, detail="Invalid token issuer")
-
-        import time
-
-        exp = payload.get("exp")
-        if exp and time.time() > exp:
-            raise HTTPException(status_code=401, detail="Token expired")
-
-        return payload
+        _log(f"unsupported algorithm: {alg}")
+        raise HTTPException(status_code=401, detail=f"Unsupported token algorithm: {alg}")
 
     except HTTPException:
         raise
-    except JWTError:
+    except JWTError as e:
+        _log(f"unexpected JWTError: {e}")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    except Exception:
+    except Exception as e:
+        _log(f"unexpected error: {type(e).__name__}: {e}")
         raise HTTPException(status_code=401, detail="Invalid or expired token")

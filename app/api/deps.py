@@ -83,12 +83,17 @@ def get_current_context(authorization: Optional[str] = Header(None)) -> RequestC
         try:
             profile = _create_store_and_profile(supa, user_id, user_metadata)
         except Exception as e:
-            if "23505" in str(e) or "duplicate" in str(e).lower():
+            err = str(e)
+            if "23505" in err or "duplicate" in err.lower():
                 prof_result = supa.table("profiles").select("*").eq("id", user_id).execute()
                 if prof_result.data and len(prof_result.data) > 0:
                     profile = prof_result.data[0]
                 else:
                     raise HTTPException(status_code=500, detail="Failed to get or create profile")
+            elif "23503" in err or "foreign key" in err.lower() or "violates foreign key" in err.lower():
+                # auth.users(id) is gone — JWT belongs to a deleted account.
+                # Force a clean re-auth instead of leaking a 500.
+                raise HTTPException(status_code=401, detail="Account no longer exists")
             else:
                 print(f"[get_current_context] Error creating profile: {e}")
                 raise HTTPException(status_code=500, detail=f"Failed to create profile: {str(e)}")
