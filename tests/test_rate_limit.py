@@ -34,7 +34,10 @@ def test_rate_limit_blocks_after_threshold(app_with_small_rate_limit, monkeypatc
     with patch("app.db.supabase.get_supabase_client") as mock_supa, \
          patch("app.clients.paystack.initialize_transaction") as mock_init:
         mock_supa.return_value = MagicMock()
-        mock_init.return_value = "https://checkout.paystack.com/test"
+        mock_init.return_value = {
+            "url": "https://checkout.paystack.com/test",
+            "reference": "ref_test",
+        }
 
         headers = {"x-forwarded-for": "1.2.3.4"}
         payload = {"plan": "pro", "email": "test@example.com"}

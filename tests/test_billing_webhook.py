@@ -71,7 +71,10 @@ class TestCheckout:
     @patch("app.db.supabase.get_supabase_client")
     @patch("app.clients.paystack.initialize_transaction")
     def test_checkout_paystack_success(self, mock_init, mock_supa, client, admin_context):
-        mock_init.return_value = "https://checkout.paystack.com/test"
+        mock_init.return_value = {
+            "url": "https://checkout.paystack.com/test",
+            "reference": "ref_test_xyz",
+        }
 
         supa = MagicMock()
         sub_query = MagicMock()
@@ -84,7 +87,10 @@ class TestCheckout:
         try:
             res = client.post("/billing/checkout", json={"plan": "pro", "email": "test@example.com"})
             assert res.status_code == 200
-            assert res.json()["url"] == "https://checkout.paystack.com/test"
+            body = res.json()
+            assert body["url"] == "https://checkout.paystack.com/test"
+            # Mobile clients use the reference to verify directly via /billing/paystack/sync.
+            assert body["reference"] == "ref_test_xyz"
         finally:
             app.dependency_overrides.clear()
 

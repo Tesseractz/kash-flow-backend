@@ -50,7 +50,10 @@ def _subscription_select_chain_mock(trial_consumed_at=None):
 def test_paystack_checkout_returns_authorization_url(mock_init_tx, mock_supa, client, monkeypatch):
     monkeypatch.setenv("BILLING_PROVIDER", "paystack")
     mock_supa.return_value.table.return_value = _subscription_select_chain_mock(None)
-    mock_init_tx.return_value = "https://checkout.paystack.com/abc"
+    mock_init_tx.return_value = {
+        "url": "https://checkout.paystack.com/abc",
+        "reference": "ref_test_abc",
+    }
 
     resp = client.post("/billing/checkout", json={"plan": "pro", "email": "a@b.com"})
     assert resp.status_code == 200
@@ -65,7 +68,10 @@ def test_paystack_checkout_uses_no_trial_plan_when_trial_already_consumed(mock_i
     monkeypatch.setenv("BILLING_PROVIDER", "paystack")
     monkeypatch.setenv("PAYSTACK_PLAN_CODE_NO_TRIAL_TEST", "PLAN_NO_TRIAL_X")
     mock_supa.return_value.table.return_value = _subscription_select_chain_mock("2026-01-01T00:00:00Z")
-    mock_init_tx.return_value = "https://checkout.paystack.com/abc"
+    mock_init_tx.return_value = {
+        "url": "https://checkout.paystack.com/abc",
+        "reference": "ref_test_abc",
+    }
 
     resp = client.post("/billing/checkout", json={"plan": "pro", "email": "a@b.com"})
     assert resp.status_code == 200
@@ -80,7 +86,10 @@ def test_paystack_checkout_callback_prefers_browser_origin(mock_init_tx, mock_su
     monkeypatch.setenv("BILLING_PROVIDER", "paystack")
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:5001")
     mock_supa.return_value.table.return_value = _subscription_select_chain_mock(None)
-    mock_init_tx.return_value = "https://checkout.paystack.com/abc"
+    mock_init_tx.return_value = {
+        "url": "https://checkout.paystack.com/abc",
+        "reference": "ref_test_abc",
+    }
 
     resp = client.post(
         "/billing/checkout",
@@ -103,7 +112,10 @@ def test_paystack_checkout_callback_uses_spa_port_when_cors_lists_other_loopback
     monkeypatch.setenv("BILLING_PROVIDER", "paystack")
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:5001")
     mock_supa.return_value.table.return_value = _subscription_select_chain_mock(None)
-    mock_init_tx.return_value = "https://checkout.paystack.com/abc"
+    mock_init_tx.return_value = {
+        "url": "https://checkout.paystack.com/abc",
+        "reference": "ref_test_abc",
+    }
 
     resp = client.post(
         "/billing/checkout",

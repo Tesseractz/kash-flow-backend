@@ -86,11 +86,16 @@ def initialize_transaction(
     callback_url: str,
     metadata: dict,
     plan_code: Optional[str] = None,
-) -> str:
-    """
-    Create a Paystack hosted payment page (transaction initialize).
-    Returns authorization_url.
-    plan_code: override Paystack plan (e.g. no-trial plan after trial was consumed).
+) -> Dict[str, str]:
+    """Create a Paystack hosted payment page.
+
+    Returns {"url": authorization_url, "reference": transaction_reference}.
+    The reference is what /billing/paystack/sync uses to verify the
+    transaction directly with Paystack — required for the mobile flow
+    where we can't read the callback URL.
+
+    plan_code overrides the default plan (used for the no-trial variant
+    after a store has consumed its one-time trial).
     """
     secret = get_paystack_secret_key()
     if not secret:
@@ -118,7 +123,12 @@ def initialize_transaction(
     data = resp.json() if resp.content else {}
     if resp.status_code >= 400 or not data.get("status"):
         raise Exception(data.get("message") or f"Paystack init failed: HTTP {resp.status_code}")
-    return data["data"]["authorization_url"]
+    body = data.get("data") or {}
+    url = body.get("authorization_url")
+    reference = body.get("reference")
+    if not url or not reference:
+        raise Exception("Paystack response missing authorization_url or reference")
+    return {"url": url, "reference": reference}
 
 
 def verify_transaction(*, reference: str) -> dict:

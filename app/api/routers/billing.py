@@ -162,7 +162,7 @@ def create_checkout_session(
     # R190.00 — must match PAYSTACK_PLAN_CODE amount in your Paystack dashboard.
     amount_kobo = 19000
 
-    url = paystack_client.initialize_transaction(
+    init = paystack_client.initialize_transaction(
         email=email,
         amount_kobo=amount_kobo,
         callback_url=callback_url,
@@ -176,7 +176,11 @@ def create_checkout_session(
         )
     except Exception:
         pass
-    return {"url": url}
+    # Returning the reference lets the mobile client verify the transaction
+    # directly after checkout (it can't read the callback URL the way a
+    # browser does), and lets the web flow recover if Paystack's redirect
+    # somehow drops the ?reference query param.
+    return {"url": init["url"], "reference": init["reference"]}
 
 
 @router.post("/billing/paystack/sync")
