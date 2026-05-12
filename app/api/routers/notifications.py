@@ -3,6 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import app.services.fcm as fcm_mod
 import app.services.notifications as notifications_mod
 import app.services.push as push_mod
 import app.services.subscriptions as subscriptions
@@ -81,9 +82,113 @@ def push_test(ctx: RequestContext = Depends(get_current_context)):
         .eq("user_id", ctx.user_id)
         .execute()
     ).data or []
-    if not subs:
+    fcm_tokens_rows = (
+        supabase.table("fcm_tokens")
+        .select("token")
+        .eq("store_id", ctx.store_id)
+        .eq("user_id", ctx.user_id)
+        .execute()
+    ).data or []
+    tokens = [r.get("token") for r in fcm_tokens_rows if r.get("token")]
+
+    if not subs and not tokens:
         return {"sent": 0, "message": "No device subscriptions for this user"}
-    return push_mod.send_web_push(subs, title="KashPoint test", body="Device notifications are working.", url="/")
+
+    webpush_result = (
+        push_mod.send_web_push(subs, title="KashPoint test", body="Device notifications are working.", url="/")
+        if subs
+        else {"sent": 0, "failed": 0, "errors": []}
+    )
+    fcm_result = (
+        fcm_mod.send_fcm(tokens, title="KashPoint test", body="Device notifications are working.", url="/")
+        if tokens
+        else {"sent": 0, "failed": 0, "invalid_tokens": [], "errors": []}
+    )
+    if fcm_result.get("invalid_tokens"):
+        fcm_mod.purge_invalid_tokens(supabase, fcm_result["invalid_tokens"])
+
+    return {
+        "sent": (webpush_result.get("sent", 0) or 0) + (fcm_result.get("sent", 0) or 0),
+        "webpush": webpush_result,
+        "fcm": fcm_result,
+    }
+
+
+# ----------------------------------------------------------------------
+# FCM (mobile native push) — separate token storage from Web Push because
+# the data shape differs (single token instead of endpoint+p256dh+auth).
+# ----------------------------------------------------------------------
+class FcmSubscribeRequest(BaseModel):
+    token: str
+    platform: Optional[str] = None  # 'android' | 'ios'
+    device_info: Optional[str] = None
+
+
+class FcmUnsubscribeRequest(BaseModel):
+    token: str
+
+
+@router.get("/push/fcm/status")
+def push_fcm_status(ctx: RequestContext = Depends(get_current_context)):
+    """Lightweight probe the mobile app can call to decide whether to register."""
+    return {"configured": fcm_mod.is_fcm_configured()}
+
+
+@router.post("/push/fcm/subscribe", response_model=PushSubscribeResponse)
+def push_fcm_subscribe(
+    payload: FcmSubscribeRequest,
+    request: Request,
+    ctx: RequestContext = Depends(get_current_context),
+):
+    if not payload.token or len(payload.token) < 16:
+        raise HTTPException(status_code=400, detail="Invalid FCM token")
+    supabase = supabase_client.get_supabase_client()
+    ua = request.headers.get("user-agent")
+    row = {
+        "store_id": ctx.store_id,
+        "user_id": ctx.user_id,
+        "token": payload.token,
+        "platform": payload.platform,
+        "device_info": payload.device_info or ua,
+        "updated_at": now_utc_iso(),
+    }
+    try:
+        supabase.table("fcm_tokens").upsert(row, on_conflict="token").execute()
+        return PushSubscribeResponse(success=True, message="Subscribed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/push/fcm/unsubscribe", response_model=PushSubscribeResponse)
+def push_fcm_unsubscribe(payload: FcmUnsubscribeRequest, ctx: RequestContext = Depends(get_current_context)):
+    supabase = supabase_client.get_supabase_client()
+    try:
+        supabase.table("fcm_tokens").delete().eq("store_id", ctx.store_id).eq("token", payload.token).execute()
+        return PushSubscribeResponse(success=True, message="Unsubscribed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/push/fcm/test")
+def push_fcm_test(ctx: RequestContext = Depends(get_current_context)):
+    """Send a test push to this user's FCM tokens only (mobile-only check)."""
+    if not fcm_mod.is_fcm_configured():
+        raise HTTPException(status_code=503, detail="FCM is not configured on the server")
+    supabase = supabase_client.get_supabase_client()
+    rows = (
+        supabase.table("fcm_tokens")
+        .select("token")
+        .eq("store_id", ctx.store_id)
+        .eq("user_id", ctx.user_id)
+        .execute()
+    ).data or []
+    tokens = [r.get("token") for r in rows if r.get("token")]
+    if not tokens:
+        return {"sent": 0, "message": "No FCM tokens registered for this user"}
+    result = fcm_mod.send_fcm(tokens, title="KashPoint test", body="Native push is working.", url="/")
+    if result.get("invalid_tokens"):
+        fcm_mod.purge_invalid_tokens(supabase, result["invalid_tokens"])
+    return result
 
 
 class SendLowStockAlertRequest(BaseModel):

@@ -307,8 +307,13 @@ def cancel_subscription(ctx: RequestContext = Depends(get_current_context)):
 async def paystack_webhook(request: Request):
     raw = await request.body()
     signature = request.headers.get("x-paystack-signature")
-    if not paystack_client.verify_paystack_signature(raw, signature):
-        raise HTTPException(status_code=400, detail="Invalid Paystack signature")
+    ok, reason = paystack_client.verify_paystack_signature_with_reason(raw, signature)
+    if not ok:
+        # Log the reason so operators can tell apart "wrong secret",
+        # "no signature header" (likely a misconfigured webhook source),
+        # "body altered by a proxy", etc. The body itself is never logged.
+        print(f"[Paystack webhook] signature rejected: {reason}")
+        raise HTTPException(status_code=400, detail=f"Invalid Paystack signature: {reason}")
 
     try:
         try:

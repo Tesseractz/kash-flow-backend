@@ -43,11 +43,40 @@ def get_paystack_plan_code_no_trial() -> str:
 
 
 def verify_paystack_signature(raw_body: bytes, signature: Optional[str]) -> bool:
+    """Return True iff the signature is a valid Paystack HMAC-SHA512 of raw_body.
+
+    Returns False on any failure. Use `verify_paystack_signature_with_reason`
+    instead when you want a human-readable reason for diagnostic logs.
+    """
+    return verify_paystack_signature_with_reason(raw_body, signature)[0]
+
+
+def verify_paystack_signature_with_reason(
+    raw_body: bytes, signature: Optional[str]
+) -> tuple[bool, str]:
+    """Verify and explain. Returns (ok, reason).
+
+    `reason` is "ok" on success, otherwise a short tag plus a body-length
+    sanity check (no body bytes are logged, no secret bytes are leaked).
+    """
     secret = get_paystack_secret_key()
-    if not secret or not signature:
-        return False
+    if not secret:
+        return False, "missing PAYSTACK_SECRET_KEY"
+    if not signature:
+        return False, "missing X-Paystack-Signature header"
+    sig = signature.strip()
+    # Paystack signatures are 128 hex chars (SHA-512). A short or non-hex
+    # value is almost certainly truncation/proxy mangling.
+    if len(sig) != 128:
+        return False, f"signature length {len(sig)} != 128"
+    try:
+        int(sig, 16)
+    except ValueError:
+        return False, "signature is not hex"
     digest = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha512).hexdigest()
-    return hmac.compare_digest(digest, signature)
+    if hmac.compare_digest(digest, sig.lower()):
+        return True, "ok"
+    return False, f"hmac mismatch (body {len(raw_body)} bytes)"
 
 
 def initialize_transaction(

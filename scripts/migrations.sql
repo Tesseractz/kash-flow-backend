@@ -175,6 +175,27 @@ update public.sales s
  where s.product_id = p.id
    and s.profit is null;
 
+-- ------------------------------------------------------------
+-- 8. fcm_tokens: native push tokens for the Capacitor mobile app
+--    Web Push (push_subscriptions, above) doesn't work in a
+--    Capacitor WebView — FCM is the only native delivery path on
+--    Android. Stored separately because the data shape is different
+--    (single token string, no endpoint/p256dh/auth).
+-- ------------------------------------------------------------
+create table if not exists public.fcm_tokens (
+    id uuid primary key default gen_random_uuid(),
+    store_id uuid not null references public.stores(id) on delete cascade,
+    user_id uuid not null references auth.users(id) on delete cascade,
+    token text not null unique,
+    platform text,           -- 'android' | 'ios'
+    device_info text,        -- user-agent or model string for the UI
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_fcm_tokens_store on public.fcm_tokens(store_id);
+create index if not exists idx_fcm_tokens_user on public.fcm_tokens(user_id);
+
 -- ============================================================
 -- Done. After running:
 --  * /billing/paystack/sync stops 500-ing
@@ -183,4 +204,5 @@ update public.sales s
 --  * Every admin action lands in audit_logs
 --  * New subscriptions default to billing_provider='paystack'
 --  * sales.profit is recorded by process_sale (and backfilled)
+--  * Mobile apps can register FCM tokens via /push/fcm/subscribe
 -- ============================================================

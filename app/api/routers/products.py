@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 import app.services.audit_log as audit_log
+import app.services.device_delivery as device_delivery
 import app.services.notification_settings as notification_settings
-import app.services.push as push_mod
 import app.services.subscriptions as subscriptions
 import app.db.supabase as supabase_client
 from app.api.deps import RequestContext, get_current_context
@@ -172,19 +172,13 @@ def update_product(product_id: int, payload: ProductUpdate, ctx: RequestContext 
             threshold = int(settings.get("low_stock_threshold") or 10)
             qty = int(product.get("quantity") or 0)
             if qty <= threshold:
-                subs = (
-                    supabase.table("push_subscriptions")
-                    .select("endpoint,p256dh,auth")
-                    .eq("store_id", ctx.store_id)
-                    .execute()
-                ).data or []
-                if subs:
-                    push_mod.send_web_push(
-                        subs,
-                        title=f"Low stock: {product.get('name') or 'Product'}",
-                        body=f"Only {qty} left in stock.",
-                        url="/products",
-                    )
+                device_delivery.notify_store(
+                    supabase,
+                    ctx.store_id,
+                    title=f"Low stock: {product.get('name') or 'Product'}",
+                    body=f"Only {qty} left in stock.",
+                    url="/products",
+                )
         except Exception:
             pass
         return product
@@ -259,19 +253,13 @@ def create_sale(payload: SaleCreate, ctx: RequestContext = Depends(get_current_c
                 p = prod_res.data or {}
                 qty = int(p.get("quantity") or 0)
                 if qty <= threshold:
-                    subs = (
-                        supabase.table("push_subscriptions")
-                        .select("endpoint,p256dh,auth")
-                        .eq("store_id", ctx.store_id)
-                        .execute()
-                    ).data or []
-                    if subs:
-                        push_mod.send_web_push(
-                            subs,
-                            title=f"Low stock: {p.get('name') or 'Product'}",
-                            body=f"Only {qty} left in stock.",
-                            url="/products",
-                        )
+                    device_delivery.notify_store(
+                        supabase,
+                        ctx.store_id,
+                        title=f"Low stock: {p.get('name') or 'Product'}",
+                        body=f"Only {qty} left in stock.",
+                        url="/products",
+                    )
             except Exception:
                 pass
             return sale
