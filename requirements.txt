@@ -17,6 +17,10 @@ Pillow>=11.0.0
 # Firebase Cloud Messaging — native push delivery for the Capacitor mobile app
 firebase-admin==6.5.0
 
+# Optional: shared rate-limit counters across workers/instances.
+# Uncomment + set REDIS_URL in your env if you scale beyond a single uvicorn process.
+# redis==5.0.8
+
 # Testing
 pytest==8.3.4
 pytest-asyncio==0.24.0

@@ -1,6 +1,3 @@
-import os
-import time
-from collections import defaultdict, deque
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,6 +10,7 @@ load_dotenv(dotenv_path=_ENV_PATH, override=False)
 from app.api.routers import billing, customers, expenses, legal_health, notifications, privacy, products, profile_plan, reports, users
 from app.core.http_config import allowed_origins
 from app.core.password_crypto import _decrypt_password, _encrypt_password
+from app.services.rate_limit import get_rate_limiter
 
 app = FastAPI(title="KashPoint API", version="1.0.0")
 
@@ -24,10 +22,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_rl_window_sec = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
-_rl_max_requests = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120"))
-_rl_buckets = defaultdict(lambda: deque())
-_rl_paths = {
+# Endpoints that get rate-limited. Everything else is unmetered — these
+# four are the ones that touch external paid services (Paystack) or are
+# obvious abuse targets.
+_RL_PATHS = {
     ("POST", "/billing/checkout"),
     ("POST", "/billing/portal"),
     ("POST", "/billing/paystack/sync"),
@@ -40,27 +38,22 @@ async def rate_limit_middleware(request: Request, call_next):
     method = request.method.upper()
     path = request.url.path
 
-    if (method, path) in _rl_paths:
+    if (method, path) in _RL_PATHS:
         forwarded_for = request.headers.get("x-forwarded-for")
         ip = (forwarded_for.split(",")[0].strip() if forwarded_for else None) or (
             request.client.host if request.client else "unknown"
         )
         key = f"{ip}:{method}:{path}"
-        now = time.time()
-        q = _rl_buckets[key]
 
-        while q and (now - q[0]) > _rl_window_sec:
-            q.popleft()
-
-        if len(q) >= _rl_max_requests:
+        limiter = get_rate_limiter()
+        allowed, retry_after = limiter.check(key)
+        if not allowed:
             return Response(
                 content='{"detail":"Too many requests"}',
                 status_code=429,
                 media_type="application/json",
-                headers={"Retry-After": str(_rl_window_sec)},
+                headers={"Retry-After": str(retry_after)},
             )
-
-        q.append(now)
 
     return await call_next(request)
 
