@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel, Field, conint, confloat
 from datetime import datetime, date
 from uuid import UUID
@@ -89,6 +89,7 @@ class SaleCreate(BaseModel):
     product_id: int
     quantity_sold: conint(gt=0)  # type: ignore[valid-type]
     customer_id: Optional[str] = None  # UUID of customer
+    payment_method: Optional[Literal["cash", "card"]] = None
 
 
 class BatchSaleCreate(BaseModel):
@@ -104,6 +105,7 @@ class Sale(BaseModel):
     subtotal: Optional[float] = None
     customer_id: Optional[str] = None
     timestamp: datetime
+    payment_method: Optional[str] = None  # 'cash' | 'card' (null on legacy rows)
     profit: Optional[float] = None  # Profit for this sale (revenue - cost)
     customer: Optional[Customer] = None  # Nested customer object
     product_name: Optional[str] = None  # Enriched from products table for reports

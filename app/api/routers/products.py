@@ -215,15 +215,17 @@ def list_sales(ctx: RequestContext = Depends(get_current_context)):
 def create_sale(payload: SaleCreate, ctx: RequestContext = Depends(get_current_context)):
     supabase = supabase_client.get_supabase_client()
     try:
-        rpc = supabase.rpc(
-            "process_sale",
-            {
-                "p_store_id": ctx.store_id,
-                "p_product_id": payload.product_id,
-                "p_qty": payload.quantity_sold,
-                "p_sold_by": ctx.user_id,
-            },
-        ).execute()
+        rpc_params = {
+            "p_store_id": ctx.store_id,
+            "p_product_id": payload.product_id,
+            "p_qty": payload.quantity_sold,
+            "p_sold_by": ctx.user_id,
+        }
+        # Only send when provided so the RPC stays compatible with databases
+        # that haven't applied the payment_method migration yet.
+        if payload.payment_method:
+            rpc_params["p_payment_method"] = payload.payment_method
+        rpc = supabase.rpc("process_sale", rpc_params).execute()
         sale = None
         if isinstance(rpc.data, list) and len(rpc.data) > 0:
             sale = rpc.data[0]
