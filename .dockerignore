@@ -1,0 +1,16 @@
+.git
+.github
+env/
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+.env
+.env.*
+*.backup.gz
+*.dump
