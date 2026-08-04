@@ -44,7 +44,8 @@ def _create_store_and_profile(supa, user_id: str, user_metadata: dict) -> dict:
     if not profile_result.data:
         raise HTTPException(status_code=500, detail="Failed to create profile")
 
-    existing_sub = supa.table("subscriptions").select("id").eq("store_id", store_id).limit(1).execute()
+    # subscriptions is keyed by store_id (no id column in the production schema)
+    existing_sub = supa.table("subscriptions").select("store_id").eq("store_id", store_id).limit(1).execute()
     if not existing_sub.data:
         supa.table("subscriptions").insert({"store_id": store_id, "plan": "free", "status": "active"}).execute()
 
