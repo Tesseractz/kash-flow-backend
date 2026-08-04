@@ -50,3 +50,10 @@ Thumbs.db
 .coverage
 htmlcov/
 
+
+# Database dumps and backups — these contain real customer data and
+# password hashes. They must never enter the repository.
+*.backup.gz
+*.dump
+*.sql.gz
+backups/
