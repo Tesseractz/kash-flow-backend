@@ -71,43 +71,87 @@ class TestGetJwtSecret:
 
 
 class TestJwksUrl:
-    """Tests for _jwks_url function."""
-    
-    def test_returns_correct_url(self):
-        """Test that JWKS URL is constructed correctly."""
-        from app.core.auth import _jwks_url
-        
-        url = _jwks_url()
-        assert url == "https://test.supabase.co/auth/v1/jwks"
+    """Tests for _jwks_candidate_urls function."""
+
+    def test_returns_standard_then_legacy_urls(self):
+        """Well-known (GoTrue standard / self-hosted) first, legacy cloud path second."""
+        from app.core.auth import _jwks_candidate_urls
+
+        urls = _jwks_candidate_urls()
+        assert urls == [
+            "https://test.supabase.co/auth/v1/.well-known/jwks.json",
+            "https://test.supabase.co/auth/v1/jwks",
+        ]
+
+    def test_auth_jwks_url_override_wins(self, monkeypatch):
+        """AUTH_JWKS_URL (e.g. a Keycloak realm certs URL) replaces the defaults."""
+        from app.core.auth import _jwks_candidate_urls
+
+        monkeypatch.setenv("AUTH_JWKS_URL", "https://idp.example.com/realms/kash/protocol/openid-connect/certs")
+        assert _jwks_candidate_urls() == [
+            "https://idp.example.com/realms/kash/protocol/openid-connect/certs"
+        ]
 
 
 class TestGetJwks:
     """Tests for _get_jwks function."""
-    
+
     def test_fetches_jwks_on_first_call(self):
-        """Test that JWKS is fetched from the server."""
+        """Test that JWKS is fetched from the server (first candidate URL)."""
         import app.core.auth as auth_module
-        
+
         # Clear cache
         auth_module.JWKS_CACHE = None
-        
+        auth_module._JWKS_FETCHED_AT = 0.0
+
         mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"keys": [{"kid": "key1", "kty": "RSA"}]}
-        mock_response.raise_for_status.return_value = None
-        
+
         with patch('httpx.Client') as mock_client:
-            mock_client.return_value.__enter__.return_value.get.return_value = mock_response
-            
+            mock_get = mock_client.return_value.__enter__.return_value.get
+            mock_get.return_value = mock_response
+
             result = auth_module._get_jwks()
-        
+
+            first_url_called = mock_get.call_args_list[0][0][0]
+            assert first_url_called == "https://test.supabase.co/auth/v1/.well-known/jwks.json"
+
         assert result == {"keys": [{"kid": "key1", "kty": "RSA"}]}
+        auth_module.JWKS_CACHE = None
+
+    def test_failed_fetch_does_not_poison_cache(self):
+        """A failed fetch must NOT be cached — the next call retries and recovers.
+
+        Regression test: the old implementation cached {"keys": []} forever
+        after a single failure, 401-ing every asymmetric token until restart.
+        """
+        import app.core.auth as auth_module
+
+        auth_module.JWKS_CACHE = None
+        auth_module._JWKS_FETCHED_AT = 0.0
+
+        with patch('httpx.Client') as mock_client:
+            mock_client.return_value.__enter__.return_value.get.side_effect = Exception("down")
+            assert auth_module._get_jwks() == {"keys": []}
+
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        ok_response.json.return_value = {"keys": [{"kid": "rotated", "kty": "RSA"}]}
+
+        with patch('httpx.Client') as mock_client:
+            mock_client.return_value.__enter__.return_value.get.return_value = ok_response
+            assert auth_module._get_jwks() == {"keys": [{"kid": "rotated", "kty": "RSA"}]}
+
+        auth_module.JWKS_CACHE = None
     
     def test_returns_cached_jwks(self):
         """Test that cached JWKS is returned on subsequent calls."""
         import app.core.auth as auth_module
-        
+
         auth_module.JWKS_CACHE = {"keys": [{"kid": "cached", "kty": "RSA"}]}
-        
+        auth_module._JWKS_FETCHED_AT = time.monotonic()  # fresh — no refetch
+
         result = auth_module._get_jwks()
         
         assert result == {"keys": [{"kid": "cached", "kty": "RSA"}]}
