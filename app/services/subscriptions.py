@@ -9,8 +9,27 @@ from app.db.supabase import get_supabase_client
 DEV_PLAN_OVERRIDE = os.getenv("DEV_PLAN_OVERRIDE", "").lower()
 
 
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    """Parse a stored ISO timestamp, tolerating 'Z' and naive values."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 class PlanLimits:
-    def __init__(self, plan: str, status: str = "active", trial_end: Optional[str] = None):
+    def __init__(
+        self,
+        plan: str,
+        status: str = "active",
+        trial_end: Optional[str] = None,
+        current_period_end: Optional[str] = None,
+    ):
         normalized_plan = "pro" if plan == "business" else plan
         self.plan = normalized_plan
         st = status
@@ -18,23 +37,42 @@ class PlanLimits:
             st = "active"
         self.status = st
         self.trial_end = trial_end
+        self.current_period_end = current_period_end
         self._is_trial_active = self._check_trial_active()
+        self._period_expired = self._check_period_expired()
 
     def _check_trial_active(self) -> bool:
         if self.status != "trialing":
             return False
-        if not self.trial_end:
+        trial_dt = _parse_iso(self.trial_end)
+        if not trial_dt:
             return False
-        try:
-            trial_dt = datetime.fromisoformat(self.trial_end.replace("Z", "+00:00"))
-            return datetime.now(timezone.utc) < trial_dt
-        except Exception:
+        return datetime.now(timezone.utc) < trial_dt
+
+    def _check_period_expired(self) -> bool:
+        """True only when we know the paid-through date and it has passed.
+
+        An unset or unparseable value is never treated as expired, so a store
+        can't be locked out by missing or malformed billing data.
+        """
+        period_dt = _parse_iso(self.current_period_end)
+        if not period_dt:
             return False
+        return datetime.now(timezone.utc) >= period_dt
 
     @property
     def is_active(self) -> bool:
-        if self.status == "active" and self.plan in ("pro", "business"):
-            return True
+        paid_plan = self.plan in ("pro", "business")
+        if self.status == "active" and paid_plan:
+            # Nothing ever expires a subscription on a timer, so a lapsed
+            # paid-through date must revoke access here — otherwise a store
+            # whose cancellation or renewal failure never reached us keeps
+            # full access forever.
+            return not self._period_expired
+        if self.status == "past_due" and paid_plan:
+            # Paystack retries a failed charge for a while. Keep access until
+            # the period they already paid for runs out, then stop.
+            return bool(self.current_period_end) and not self._period_expired
         if self.status == "trialing" and self._is_trial_active:
             return True
         return False
@@ -107,7 +145,12 @@ def get_store_plan(store_id: str) -> PlanLimits:
             status = "active"
             trial_end = None
 
-        return PlanLimits(plan, status=status, trial_end=trial_end)
+        return PlanLimits(
+            plan,
+            status=status,
+            trial_end=trial_end,
+            current_period_end=data.get("current_period_end"),
+        )
     except Exception:
         return PlanLimits("expired", status="expired")
 

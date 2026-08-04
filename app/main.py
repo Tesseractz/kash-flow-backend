@@ -27,7 +27,6 @@ app.add_middleware(
 # obvious abuse targets.
 _RL_PATHS = {
     ("POST", "/billing/checkout"),
-    ("POST", "/billing/portal"),
     ("POST", "/billing/paystack/sync"),
     ("POST", "/paystack/webhook"),
 }

@@ -23,7 +23,7 @@
 --
 --   3. Edit the two placeholders below:
 --        - BACKEND_URL_HERE   -> your Render backend URL, no trailing slash
---                                 e.g. https://kash-flow-backend.onrender.com
+--                                 e.g. https://api.kashpoint.co.za
 --        - CRON_SECRET_HERE   -> the SAME value you put in Render env
 --
 --   4. Run the entire script in the Supabase SQL Editor.

@@ -159,8 +159,14 @@ def create_checkout_session(
 
     frontend_url = resolve_frontend_base_url(request)
     callback_url = f"{frontend_url}/billing?success=1"
-    # R190.00 — must match PAYSTACK_PLAN_CODE amount in your Paystack dashboard.
-    amount_kobo = 19000
+    # Charge amount in the currency's smallest unit (ZAR cents). This must match
+    # the amount on PAYSTACK_PLAN_CODE in the Paystack dashboard, so it is
+    # configurable rather than hardcoded — changing the plan price in Paystack
+    # without changing it here would otherwise silently mismatch.
+    try:
+        amount_kobo = int(os.getenv("PAYSTACK_PLAN_AMOUNT_CENTS") or 19000)
+    except ValueError:
+        amount_kobo = 19000
 
     init = paystack_client.initialize_transaction(
         email=email,
@@ -348,9 +354,15 @@ async def paystack_webhook(request: Request):
     event_id = data.get("id") or payload.get("id")
     if event_id:
         try:
+            # The key must include the event type. Paystack's `data.id` is the
+            # id of the object the event is about, not the id of the event, so
+            # subscription.create / subscription.enable / subscription.disable
+            # for one subscription all arrive with the SAME data.id. Keying on
+            # the id alone made every later event look like a replay of the
+            # first, and cancellations were silently discarded.
             supa.table("webhook_events").insert(
                 {
-                    "id": f"paystack:{event_id}",
+                    "id": f"paystack:{event_type}:{event_id}",
                     "type": f"paystack:{event_type}",
                     "received_at": now_utc_iso(),
                 }
