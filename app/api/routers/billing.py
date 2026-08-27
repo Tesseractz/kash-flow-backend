@@ -164,9 +164,9 @@ def create_checkout_session(
     # configurable rather than hardcoded — changing the plan price in Paystack
     # without changing it here would otherwise silently mismatch.
     try:
-        amount_kobo = int(os.getenv("PAYSTACK_PLAN_AMOUNT_CENTS") or 19000)
+        amount_kobo = int(os.getenv("PAYSTACK_PLAN_AMOUNT_CENTS") or 15000)
     except ValueError:
-        amount_kobo = 19000
+        amount_kobo = 15000
 
     init = paystack_client.initialize_transaction(
         email=email,
