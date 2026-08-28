@@ -292,8 +292,13 @@ class TestGetStorePlan:
             assert limits.is_on_trial is False
             assert limits.is_active is True
 
-    def test_get_store_plan_returns_expired_on_error(self):
-        """Test get_store_plan returns expired plan on database error."""
+    def test_get_store_plan_fails_open_on_error(self):
+        """A database error must fail open, not read as an expired plan.
+
+        The old contract returned "expired" here, which told paying customers
+        their subscription had lapsed every time Supabase hiccuped. See
+        tests/test_plan_fail_open.py for the full matrix.
+        """
         # Ensure DEV_PLAN_OVERRIDE is not set for this test
         os.environ.pop("DEV_PLAN_OVERRIDE", None)
         os.environ["DEV_PLAN_OVERRIDE"] = ""
@@ -313,9 +318,8 @@ class TestGetStorePlan:
             
             limits = get_store_plan("test-store-id")
             
-            assert limits.plan == "expired"
-            assert limits.status == "expired"
-            assert limits.is_active == False
+            assert limits.is_active is True
+            assert limits.degraded is True
     
     def test_dev_plan_override(self):
         """Test DEV_PLAN_OVERRIDE environment variable."""

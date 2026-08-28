@@ -38,6 +38,9 @@ class PlanLimits:
         self.status = st
         self.trial_end = trial_end
         self.current_period_end = current_period_end
+        # True when this object is a fail-open stand-in because the subscription
+        # could not be read at all — not a statement about the store's plan.
+        self.degraded = False
         self._is_trial_active = self._check_trial_active()
         self._period_expired = self._check_period_expired()
 
@@ -134,25 +137,42 @@ def get_store_plan(store_id: str) -> PlanLimits:
         return PlanLimits(normalized, status="active")
 
     supa = get_supabase_client()
-    try:
-        res = supa.table("subscriptions").select("*").eq("store_id", store_id).single().execute()
-        data = res.data or {}
-        plan = data.get("plan", "expired")
-        status = data.get("status", "expired")
-        trial_end = data.get("trial_end")
-        # One trial per store: if already consumed, do not grant in-app trial perks even if Paystack sends trialing again.
-        if data.get("trial_consumed_at") and status == "trialing":
-            status = "active"
-            trial_end = None
+    last_error = None
+    for _attempt in range(2):
+        try:
+            res = supa.table("subscriptions").select("*").eq("store_id", store_id).single().execute()
+            data = res.data or {}
+            plan = data.get("plan", "expired")
+            status = data.get("status", "expired")
+            trial_end = data.get("trial_end")
+            # One trial per store: if already consumed, do not grant in-app trial perks even if Paystack sends trialing again.
+            if data.get("trial_consumed_at") and status == "trialing":
+                status = "active"
+                trial_end = None
 
-        return PlanLimits(
-            plan,
-            status=status,
-            trial_end=trial_end,
-            current_period_end=data.get("current_period_end"),
-        )
-    except Exception:
-        return PlanLimits("expired", status="expired")
+            return PlanLimits(
+                plan,
+                status=status,
+                trial_end=trial_end,
+                current_period_end=data.get("current_period_end"),
+            )
+        except Exception as e:
+            # PGRST116 is PostgREST's "single() matched no rows": the store
+            # genuinely has no subscription, which really is no plan.
+            if getattr(e, "code", None) == "PGRST116":
+                return PlanLimits("expired", status="expired")
+            last_error = e
+
+    # The lookup itself failed — a transient Supabase or network error, not a
+    # statement about the store. Reporting "expired" here told paying
+    # customers their plan had lapsed every time the database hiccuped, and
+    # the client cannot tell that apart from the real thing. Fail open: the
+    # worst case is a lapsed store keeping features for one request, against
+    # a paying store being locked out of its own till.
+    print(f"[plan] subscriptions lookup failed twice for store {store_id}: {last_error!r}; failing open")
+    limits = PlanLimits("pro", status="active")
+    limits.degraded = True
+    return limits
 
 
 def enforce_limits_on_create_product(store_id: str):
@@ -182,6 +202,7 @@ def get_plan_info(store_id: str) -> dict:
     return {
         "plan": limits.plan,
         "status": limits.status,
+        "degraded": bool(getattr(limits, "degraded", False)),
         "is_active": limits.is_active,
         "is_on_trial": limits.is_on_trial,
         "trial_end": sub_data.get("trial_end"),
